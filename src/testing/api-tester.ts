@@ -63,6 +63,32 @@ export class APITester {
 
     logger.info(`Executing API test: ${config.name}`);
 
+    // Validate URL before attempting request
+    if (!config.request.url || config.request.url.trim() === '') {
+      const duration = Date.now() - startTime;
+      logger.warn(`API test marked as UNCERTAIN due to missing URL: ${config.name}`);
+      
+      return {
+        testName: config.name,
+        passed: false,
+        request: config.request,
+        assertions: [{
+          assertion: {
+            type: AssertionType.CUSTOM,
+            expected: 'valid URL',
+            operator: 'equals',
+            message: 'Could not execute API test because no endpoint or base URL was available.'
+          },
+          passed: false,
+          message: 'UNCERTAIN: Could not execute API test because no endpoint or base URL was available.'
+        }],
+        error: 'UNCERTAIN: Could not execute API test because no endpoint or base URL was available.',
+        duration,
+        timestamp: new Date().toISOString(),
+        retryCount: 0
+      };
+    }
+
     while (retryCount <= maxRetries) {
       try {
         // Make the API request
@@ -145,6 +171,14 @@ export class APITester {
    */
   async makeRequest(request: APIRequest): Promise<APIResponse> {
     const startTime = Date.now();
+
+    // Validate URL before making request
+    if (!request.url || request.url.trim() === '') {
+      throw new TraceQAError(
+        'Invalid or missing URL',
+        ErrorCategory.CONFIGURATION
+      );
+    }
 
     try {
       // Build axios config

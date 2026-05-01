@@ -1,236 +1,77 @@
-# TraceQA Demo Test Report
+# TraceQA Test Report
 
-**Generated:** 5/1/2026, 3:59:38 PM
+**Generated**: 2026-05-01T21:04:52.723Z
+**Project**: TraceQA
+**Branch**: current
+**TraceQA Version**: 1.0.0
 
-## Summary
+## Merge Readiness: ❌ DO NOT MERGE (Score: 35/100)
 
-- **Total Tests:** 9
-- **Passed:** 8 (88.9%)
-- **Failed:** 1 (11.1%)
-- **Merge Readiness:** ⚠️ REVIEW NEEDED (Score: 88/100)
+### Summary
 
-## Acceptance Criteria
+- **Total Tests**: 3
+- **Passed**: 0 ✅
+- **Failed**: 3 ❌
+- **Uncertain**: 0 ❓
+- **Coverage**: 0.0%
+- **Success Rate**: 0.0%
+- **Duration**: 22225.00s
 
-1. User can register with email and password
-2. Password must be at least 8 characters with uppercase, lowercase, and number
-3. User receives confirmation email after registration
-4. User can login with valid credentials
-5. User cannot login with invalid credentials
+### Recommendation
 
-## Test Results
+Critical issues detected. Do not merge until 3 failed test(s) are resolved. Score: 35/100.
 
-### TC1: Register with valid email and password ✅ PASSED
+### Risks
 
-**Description:** Verify user can successfully register with valid credentials
+- ⚠️ 3 test(s) failed
+- ⚠️ Low coverage: 0.0%
 
-**Priority:** high
+## Trace Matrix
 
-**Duration:** 100ms
+| Acceptance Criterion | Generated Tests | Status | Evidence |
+|---------------------|----------------|--------|----------|
+| All generated tests | User can register with a valid email and password | ❌ failed | Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL |
+|  | Duplicate email signup should not crash the application | ❌ failed | Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL |
+|  | Password must reject weak values | ❌ failed | Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL |
 
-**Steps:**
-1. Navigate to registration page
-2. Enter valid email address
-3. Enter valid password
-4. Click Register button
+## Detailed Test Results
 
-**Expected Result:** User is registered successfully and redirected to dashboard
+### ❌ User can register with a valid email and password
 
-**Evidence:**
+- **Status**: Failed
+- **Duration**: 3055.00s
+- **Timestamp**: 2026-05-01T21:04:30.832Z
+- **Message**: API test failed: API request failed: Invalid URL
+
+**Error Details**:
 ```
-✅ All steps executed successfully
-User is registered successfully and redirected to dashboard
-```
-
----
-
-### TC2: Register with invalid email format ✅ PASSED
-
-**Description:** Verify system rejects invalid email format
-
-**Priority:** high
-
-**Duration:** 150ms
-
-**Steps:**
-1. Navigate to registration page
-2. Enter invalid email (e.g., "notanemail")
-3. Enter valid password
-4. Click Register button
-
-**Expected Result:** Error message displayed: "Invalid email format"
-
-**Evidence:**
-```
-✅ All steps executed successfully
-Error message displayed: "Invalid email format"
+API request failed: Invalid URL
 ```
 
----
+### ❌ Duplicate email signup should not crash the application
 
-### TC3: Register with weak password ❌ FAILED
+- **Status**: Failed
+- **Duration**: 3038.00s
+- **Timestamp**: 2026-05-01T21:04:33.873Z
+- **Message**: API test failed: API request failed: Invalid URL
 
-**Description:** Verify password validation enforces complexity requirements
-
-**Priority:** high
-
-**Duration:** 200ms
-
-**Steps:**
-1. Navigate to registration page
-2. Enter valid email address
-3. Enter weak password (e.g., "pass123")
-4. Click Register button
-
-**Expected Result:** Error message displayed: "Password must be at least 8 characters with uppercase, lowercase, and number"
-
-**Evidence:**
+**Error Details**:
 ```
-❌ Test failed at step 3
-Expected: Error message displayed: "Password must be at least 8 characters with uppercase, lowercase, and number"
-Actual: Password "pass123" accepted (validation not working)
+API request failed: Invalid URL
+```
+
+### ❌ Password must reject weak values
+
+- **Status**: Failed
+- **Duration**: 3031.00s
+- **Timestamp**: 2026-05-01T21:04:36.905Z
+- **Message**: API test failed: API request failed: Invalid URL
+
+**Error Details**:
+```
+API request failed: Invalid URL
 ```
 
 ---
 
-### TC4: Password validation with strong password ✅ PASSED
-
-**Description:** Verify strong password is accepted
-
-**Priority:** high
-
-**Duration:** 100ms
-
-**Steps:**
-1. Navigate to registration page
-2. Enter valid email address
-3. Enter strong password (e.g., "SecurePass123")
-4. Click Register button
-
-**Expected Result:** Password accepted and user registered
-
-**Evidence:**
-```
-✅ All steps executed successfully
-Password accepted and user registered
-```
-
----
-
-### TC5: Email confirmation sent after registration ✅ PASSED
-
-**Description:** Verify confirmation email is sent to user
-
-**Priority:** medium
-
-**Duration:** 150ms
-
-**Steps:**
-1. Complete registration with valid credentials
-2. Check email inbox
-
-**Expected Result:** Confirmation email received with activation link
-
-**Evidence:**
-```
-✅ All steps executed successfully
-Confirmation email received with activation link
-```
-
----
-
-### TC6: Login with valid credentials ✅ PASSED
-
-**Description:** Verify user can login with correct username and password
-
-**Priority:** high
-
-**Duration:** 200ms
-
-**Steps:**
-1. Navigate to login page
-2. Enter registered email
-3. Enter correct password
-4. Click Login button
-
-**Expected Result:** User is logged in and redirected to dashboard
-
-**Evidence:**
-```
-✅ All steps executed successfully
-User is logged in and redirected to dashboard
-```
-
----
-
-### TC7: Login with valid credentials ✅ PASSED
-
-**Description:** Verify user can login with correct username and password
-
-**Priority:** high
-
-**Duration:** 100ms
-
-**Steps:**
-1. Navigate to login page
-2. Enter registered email
-3. Enter correct password
-4. Click Login button
-
-**Expected Result:** User is logged in and redirected to dashboard
-
-**Evidence:**
-```
-✅ All steps executed successfully
-User is logged in and redirected to dashboard
-```
-
----
-
-### TC8: Login with invalid password ✅ PASSED
-
-**Description:** Verify system rejects incorrect password
-
-**Priority:** high
-
-**Duration:** 150ms
-
-**Steps:**
-1. Navigate to login page
-2. Enter registered email
-3. Enter incorrect password
-4. Click Login button
-
-**Expected Result:** Error message displayed: "Invalid credentials"
-
-**Evidence:**
-```
-✅ All steps executed successfully
-Error message displayed: "Invalid credentials"
-```
-
----
-
-### TC9: Login with non-existent user ✅ PASSED
-
-**Description:** Verify system rejects non-existent user
-
-**Priority:** high
-
-**Duration:** 200ms
-
-**Steps:**
-1. Navigate to login page
-2. Enter non-registered email
-3. Enter any password
-4. Click Login button
-
-**Expected Result:** Error message displayed: "User not found"
-
-**Evidence:**
-```
-✅ All steps executed successfully
-Error message displayed: "User not found"
-```
-
----
-
+*Report generated by TraceQA v1.0.0 on 2026-05-01T21:04:52.723Z*

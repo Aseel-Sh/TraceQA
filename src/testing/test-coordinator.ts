@@ -43,7 +43,7 @@ export class TestCoordinator {
   private testRunner: TestRunner;
   private apiTester: APITester | null = null;
   private webTester: WebTester | null = null;
-  private config: Required<TestCoordinatorConfig>;
+  private config: Required<Omit<TestCoordinatorConfig, 'baseUrl'>> & { baseUrl?: string };
   private state: TestCoordinatorState;
 
   constructor(
@@ -70,7 +70,8 @@ export class TestCoordinator {
         stopServer: config.cleanup?.stopServer ?? true,
         cleanupMCP: config.cleanup?.cleanupMCP ?? true,
         saveResults: config.cleanup?.saveResults ?? true
-      }
+      },
+      baseUrl: config.baseUrl ?? undefined
     };
 
     // Initialize test runner
@@ -765,9 +766,19 @@ export class TestCoordinator {
       }
     }
     
-    // If no URL found, use default from build info
-    if (!url && context.buildInfo.port) {
-      url = `http://localhost:${context.buildInfo.port}/api/test`;
+    // If no URL found, use default from build info or config baseUrl
+    if (!url) {
+      if (this.config.baseUrl) {
+        url = `${this.config.baseUrl}/api/test`;
+      } else if (context.buildInfo.port) {
+        url = `http://localhost:${context.buildInfo.port}/api/test`;
+      }
+    } else if (url.startsWith('/') && this.config.baseUrl) {
+      // Combine relative endpoint with base URL
+      url = `${this.config.baseUrl}${url}`;
+    } else if (url.startsWith('/') && context.buildInfo.port) {
+      // Combine relative endpoint with build info port
+      url = `http://localhost:${context.buildInfo.port}${url}`;
     }
     
     // Parse expected result for assertions

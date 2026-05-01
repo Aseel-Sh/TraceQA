@@ -28,6 +28,7 @@ export interface TestConfig {
   branch?: string;
   autoApprove?: boolean;
   outputDir?: string;
+  baseUrl?: string;
 }
 
 // ============================================================================
@@ -877,6 +878,7 @@ export interface TestCoordinatorConfig {
     cleanupMCP?: boolean;
     saveResults?: boolean;
   };
+  baseUrl?: string;
 }
 
 /**

@@ -1,43 +1,36 @@
 {
-  "acceptanceCriteria": [
+  "entries": [
     {
-      "id": "AC1",
-      "description": "User can register with email and password",
-      "testCases": [
-        "TC1",
-        "TC2"
-      ]
-    },
-    {
-      "id": "AC2",
-      "description": "Password must be at least 8 characters with uppercase, lowercase, and number",
-      "testCases": [
-        "TC3",
-        "TC4"
-      ]
-    },
-    {
-      "id": "AC3",
-      "description": "User receives confirmation email after registration",
-      "testCases": [
-        "TC5",
-        "TC6"
-      ]
-    },
-    {
-      "id": "AC4",
-      "description": "User can login with valid credentials",
-      "testCases": [
-        "TC7",
-        "TC8"
-      ]
-    },
-    {
-      "id": "AC5",
-      "description": "User cannot login with invalid credentials",
-      "testCases": [
-        "TC9"
-      ]
+      "acceptanceCriterion": "All generated tests",
+      "generatedTests": [
+        "User can register with a valid email and password",
+        "Duplicate email signup should not crash the application",
+        "Password must reject weak values"
+      ],
+      "executionResults": [
+        {
+          "testId": "TC001",
+          "testName": "User can register with a valid email and password",
+          "status": "failed",
+          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL"
+        },
+        {
+          "testId": "TC002",
+          "testName": "Duplicate email signup should not crash the application",
+          "status": "failed",
+          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL"
+        },
+        {
+          "testId": "TC003",
+          "testName": "Password must reject weak values",
+          "status": "failed",
+          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL"
+        }
+      ],
+      "coverage": "none"
     }
-  ]
+  ],
+  "totalCriteria": 1,
+  "coveredCriteria": 0,
+  "coveragePercentage": 0
 }

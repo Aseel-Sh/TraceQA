@@ -44,6 +44,7 @@ export function createCLI(): Command {
     .option('-o, --output-dir <path>', 'Output directory for reports', 'traceqa-proof')
     .option('--skip-ambiguity-check', 'Skip ambiguity analysis of acceptance criteria')
     .option('--base-branch <name>', 'Base branch for git diff comparison', 'main')
+    .option('--base-url <url>', 'Base URL for API tests (e.g., http://localhost:3000)')
     .option('--debug', 'Enable debug mode')
     .action(async (options) => {
       try {
@@ -130,6 +131,7 @@ async function handleTestCommand(options: {
   outputDir?: string;
   skipAmbiguityCheck?: boolean;
   baseBranch?: string;
+  baseUrl?: string;
   debug?: boolean;
 }): Promise<void> {
   // Enable debug mode if requested
@@ -156,6 +158,23 @@ async function handleTestCommand(options: {
     // Validate test type
     const testType = parseTestType(options.type || 'both');
 
+    // Split multi-sentence descriptions into acceptance criteria
+    let acceptanceCriteria: string[] | undefined;
+    if (options.description) {
+      // Split on period followed by space or newlines
+      const sentences = options.description
+        .split(/\.\s+|\n+/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+      
+      if (sentences.length > 1) {
+        // Create AC-1, AC-2, etc. for multiple sentences
+        acceptanceCriteria = sentences.map((sentence, index) =>
+          `AC-${index + 1}: ${sentence}${sentence.endsWith('.') ? '' : '.'}`
+        );
+      }
+    }
+
     config = {
       repository: {
         path: repoPath,
@@ -164,8 +183,10 @@ async function handleTestCommand(options: {
       },
       testType,
       description: options.description,
+      acceptanceCriteria,
       autoApprove: options.yes || false,
-      outputDir: options.outputDir
+      outputDir: options.outputDir,
+      baseUrl: options.baseUrl
     };
 
     logger.info('Starting tests with provided configuration...');
@@ -377,7 +398,8 @@ async function executeTests(config: TestConfig, diffAnalysis: DiffAnalysis | nul
     buildSystem: {
       autoInstall: true,
       autoStart: config.testType === TestType.WEB_UI || config.testType === TestType.BOTH
-    }
+    },
+    baseUrl: config.baseUrl
   });
 
   try {
