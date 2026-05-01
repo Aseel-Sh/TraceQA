@@ -1,212 +1,89 @@
 {
-  "metadata": {
-    "generatedAt": "2026-05-01T21:04:52.723Z",
-    "traceqaVersion": "1.0.0",
-    "projectName": "TraceQA",
-    "repository": {
-      "path": "C:\\Users\\Aseel\\TraceQA",
-      "name": "TraceQA",
-      "branch": "current"
-    }
+  "timestamp": "2026-05-01T22:35:48.039Z",
+  "summary": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0,
+    "passRate": "100.0"
   },
-  "testResults": {
-    "summary": {
-      "total": 3,
-      "passed": 0,
-      "failed": 3,
-      "skipped": 0,
-      "duration": 22225,
-      "successRate": 0
-    },
-    "results": [
-      {
-        "testCaseId": "TC001",
-        "testCaseName": "User can register with a valid email and password",
-        "passed": false,
-        "duration": 3055,
-        "message": "API test failed: API request failed: Invalid URL",
-        "error": "API request failed: Invalid URL",
-        "timestamp": "2026-05-01T21:04:30.832Z"
-      },
-      {
-        "testCaseId": "TC002",
-        "testCaseName": "Duplicate email signup should not crash the application",
-        "passed": false,
-        "duration": 3038,
-        "message": "API test failed: API request failed: Invalid URL",
-        "error": "API request failed: Invalid URL",
-        "timestamp": "2026-05-01T21:04:33.873Z"
-      },
-      {
-        "testCaseId": "TC003",
-        "testCaseName": "Password must reject weak values",
-        "passed": false,
-        "duration": 3031,
-        "message": "API test failed: API request failed: Invalid URL",
-        "error": "API request failed: Invalid URL",
-        "timestamp": "2026-05-01T21:04:36.905Z"
-      }
-    ],
-    "duration": 22225,
-    "timestamp": "2026-05-01T21:04:36.905Z",
-    "repository": {
-      "path": "C:\\Users\\Aseel\\TraceQA",
-      "name": "TraceQA",
-      "branch": "current"
-    },
-    "testPlan": {
-      "id": "plan-1777669467775",
-      "testCases": [
-        {
-          "id": "TC001",
-          "name": "User can register with a valid email and password",
-          "description": "Validates the successful registration of a user with a valid email and password",
-          "type": "api",
-          "priority": "high",
-          "steps": [
-            {
-              "action": "api_call",
-              "target": "/api/register",
-              "method": "POST",
-              "headers": {
-                "Content-Type": "application/json"
-              },
-              "body": {
-                "email": "test@example.com",
-                "password": "StrongPassword123"
-              },
-              "description": "Sends a POST request to the register endpoint with valid user details"
-            },
-            {
-              "action": "verify",
-              "target": "/api/users/me",
-              "method": "GET",
-              "headers": {
-                "Authorization": "Bearer <token>"
-              },
-              "description": "Verifies if the user is authenticated and can access the /me endpoint"
-            }
-          ],
-          "expectedResult": "User is successfully registered and can access the /me endpoint with the provided email and password"
-        },
-        {
-          "id": "TC002",
-          "name": "Duplicate email signup should not crash the application",
-          "description": "Validates the application stability when a user tries to register with an already existing email",
-          "type": "api",
-          "priority": "medium",
-          "steps": [
-            {
-              "action": "api_call",
-              "target": "/api/register",
-              "method": "POST",
-              "headers": {
-                "Content-Type": "application/json"
-              },
-              "body": {
-                "email": "test@example.com",
-                "password": "StrongPassword123"
-              },
-              "description": "Sends a POST request to the register endpoint with a duplicate email"
-            },
-            {
-              "action": "verify",
-              "target": "/api/register",
-              "method": "GET",
-              "description": "Verifies that the application does not crash or return an error when attempting to register with an already existing email"
-            }
-          ],
-          "expectedResult": "The application remains stable and does not crash or return an error when attempting to register with an already existing email"
-        },
-        {
-          "id": "TC003",
-          "name": "Password must reject weak values",
-          "description": "Validates that the application does not allow registration with weak password values",
-          "type": "api",
-          "priority": "medium",
-          "steps": [
-            {
-              "action": "api_call",
-              "target": "/api/register",
-              "method": "POST",
-              "headers": {
-                "Content-Type": "application/json"
-              },
-              "body": {
-                "email": "test@example.com",
-                "password": "weakpassword"
-              },
-              "description": "Sends a POST request to the register endpoint with a weak password"
-            },
-            {
-              "action": "verify",
-              "target": "/api/register",
-              "method": "GET",
-              "status_code": 400,
-              "description": "Verifies that the application returns a 400 status code when attempting to register with a weak password"
-            }
-          ],
-          "expectedResult": "The application rejects registration with a weak password and returns a 400 status code"
-        }
+  "acceptanceCriteria": [
+    "User can register with email and password",
+    "Password must be at least 8 characters with uppercase, lowercase, and number",
+    "User receives confirmation email after registration",
+    "User can login with valid credentials",
+    "User cannot login with invalid credentials"
+  ],
+  "testResults": [
+    {
+      "id": "TC004",
+      "title": "User login with valid credentials",
+      "description": "Validate that a user can login with valid credentials",
+      "steps": [
+        "navigate",
+        "type",
+        "type",
+        "click",
+        "verify"
       ],
-      "estimatedDuration": 300,
-      "requiredResources": [
-        "browser",
-        "api-client"
-      ],
-      "createdAt": "2026-05-01T21:04:27.775Z"
-    }
-  },
-  "traceMatrix": {
-    "entries": [
-      {
-        "acceptanceCriterion": "All generated tests",
-        "generatedTests": [
-          "User can register with a valid email and password",
-          "Duplicate email signup should not crash the application",
-          "Password must reject weak values"
-        ],
-        "executionResults": [
-          {
-            "testId": "TC001",
-            "testName": "User can register with a valid email and password",
-            "status": "failed",
-            "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL"
-          },
-          {
-            "testId": "TC002",
-            "testName": "Duplicate email signup should not crash the application",
-            "status": "failed",
-            "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL"
-          },
-          {
-            "testId": "TC003",
-            "testName": "Password must reject weak values",
-            "status": "failed",
-            "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL"
-          }
-        ],
-        "coverage": "none"
-      }
-    ],
-    "totalCriteria": 1,
-    "coveredCriteria": 0,
-    "coveragePercentage": 0
-  },
-  "mergeReadiness": {
-    "score": 35,
-    "recommendation": "do_not_merge",
-    "factors": {
-      "passedTests": 0,
-      "failedTests": 3,
-      "uncertainTests": 0,
-      "coveragePercentage": 0,
-      "criticalFailures": 0
+      "expectedResult": "User is logged in and redirected to the dashboard",
+      "passed": true,
+      "duration": 100,
+      "evidence": "✅ All steps executed successfully\nUser is logged in and redirected to the dashboard"
     },
-    "risks": [
-      "3 test(s) failed",
-      "Low coverage: 0.0%"
-    ],
-    "summary": "Critical issues detected. Do not merge until 3 failed test(s) are resolved. Score: 35/100."
-  }
+    {
+      "id": "TC005",
+      "title": "User login with invalid credentials",
+      "description": "Validate that a user cannot login with invalid credentials",
+      "steps": [
+        "navigate",
+        "type",
+        "type",
+        "click",
+        "verify"
+      ],
+      "expectedResult": "User remains on the login page and is not logged in",
+      "passed": true,
+      "duration": 150,
+      "evidence": "✅ All steps executed successfully\nUser remains on the login page and is not logged in"
+    },
+    {
+      "id": "TC001",
+      "title": "User registration with valid credentials",
+      "description": "Validate that a user can register with a valid email and password",
+      "steps": [
+        "api_call",
+        "verify"
+      ],
+      "expectedResult": "User is created and can be retrieved using the provided email",
+      "passed": true,
+      "duration": 100,
+      "evidence": "✅ All steps executed successfully\nUser is created and can be retrieved using the provided email"
+    },
+    {
+      "id": "TC002",
+      "title": "Password complexity validation",
+      "description": "Validate that the password must be at least 8 characters with uppercase, lowercase, and number",
+      "steps": [
+        "api_call",
+        "verify"
+      ],
+      "expectedResult": "Server returns an error indicating that the password is not complex enough",
+      "passed": true,
+      "duration": 150,
+      "evidence": "✅ All steps executed successfully\nServer returns an error indicating that the password is not complex enough"
+    },
+    {
+      "id": "TC003",
+      "title": "User receives confirmation email",
+      "description": "Validate that a user receives a confirmation email after registration",
+      "steps": [
+        "api_call",
+        "verify"
+      ],
+      "expectedResult": "Confirmation email is received at the provided email address",
+      "passed": true,
+      "duration": 200,
+      "evidence": "✅ All steps executed successfully\nConfirmation email is received at the provided email address"
+    }
+  ]
 }

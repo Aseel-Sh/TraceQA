@@ -92,13 +92,8 @@ export class TestAgent {
       // Get response from Watsonx
       const response = await this.watsonxClient.sendMessage(prompt);
 
-      // Parse test plan from response
-      const parsedPlan = parseJSONResponse<{
-        testCases: TestCase[];
-        estimatedDuration: number;
-        requiredResources: string[];
-        reasoning: string;
-      }>(response);
+      // Parse test plan from response with repair
+      const parsedPlan = await this.parseTestPlanWithRepair(response);
 
       if (!parsedPlan || !parsedPlan.testCases) {
         throw new TraceQAError(
@@ -107,6 +102,9 @@ export class TestAgent {
           { response }
         );
       }
+
+      // Validate test plan structure
+      this.validateTestPlan(parsedPlan);
 
       // Create test plan
       const testPlan: TestPlan = {
@@ -140,6 +138,117 @@ export class TestAgent {
         error
       );
     }
+  }
+
+  /**
+   * Parse test plan with repair attempts
+   */
+  private async parseTestPlanWithRepair(response: string): Promise<{
+    testCases: TestCase[];
+    estimatedDuration: number;
+    requiredResources: string[];
+    reasoning: string;
+  } | null> {
+    const fs = await import('fs-extra');
+    const path = await import('path');
+
+    // Try parsing as-is first
+    try {
+      const parsed = parseJSONResponse<{
+        testCases: TestCase[];
+        estimatedDuration: number;
+        requiredResources: string[];
+        reasoning: string;
+      }>(response);
+      
+      if (parsed) {
+        logger.debug('Successfully parsed test plan on first attempt');
+        return parsed;
+      }
+    } catch (error) {
+      logger.debug('Initial JSON parse failed, attempting repair...');
+    }
+
+    // Save raw response for debugging
+    const proofDir = path.join(process.cwd(), 'traceqa-proof');
+    await fs.ensureDir(proofDir);
+    const rawResponsePath = path.join(proofDir, 'raw-ai-response.txt');
+    await fs.writeFile(rawResponsePath, response, 'utf-8');
+    logger.info(`Raw AI response saved to: ${rawResponsePath}`);
+
+    // Attempt repair: strip markdown fences
+    let repairedResponse = response.trim();
+    
+    // Remove markdown code fences
+    repairedResponse = repairedResponse.replace(/^```json\s*/i, '');
+    repairedResponse = repairedResponse.replace(/^```\s*/i, '');
+    repairedResponse = repairedResponse.replace(/\s*```$/i, '');
+    
+    // Fix single quotes to double quotes (be careful with apostrophes in strings)
+    // This is a simple approach - more sophisticated parsing might be needed
+    repairedResponse = repairedResponse.replace(/'/g, '"');
+    
+    // Try to extract JSON object if there's extra text
+    const jsonMatch = repairedResponse.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      repairedResponse = jsonMatch[0];
+    }
+
+    // Try parsing repaired response
+    try {
+      const parsed = JSON.parse(repairedResponse);
+      logger.success('Successfully parsed test plan after repair');
+      return parsed;
+    } catch (repairError) {
+      logger.error('JSON repair failed', repairError);
+      throw new TraceQAError(
+        `Failed to parse test plan JSON. Raw response saved to: ${rawResponsePath}`,
+        ErrorCategory.AGENT,
+        {
+          originalError: repairError instanceof Error ? repairError.message : String(repairError),
+          rawResponsePath
+        }
+      );
+    }
+  }
+
+  /**
+   * Validate test plan structure
+   */
+  private validateTestPlan(plan: any): void {
+    const errors: string[] = [];
+
+    if (!plan.testCases || !Array.isArray(plan.testCases)) {
+      errors.push('testCases must be an array');
+    } else {
+      plan.testCases.forEach((tc: any, index: number) => {
+        if (!tc.id) errors.push(`Test case ${index}: missing id`);
+        if (!tc.name) errors.push(`Test case ${index}: missing name`);
+        if (!tc.type) errors.push(`Test case ${index}: missing type`);
+        if (!tc.steps || !Array.isArray(tc.steps)) {
+          errors.push(`Test case ${index}: steps must be an array`);
+        }
+      });
+    }
+
+    if (typeof plan.estimatedDuration !== 'number') {
+      errors.push('estimatedDuration must be a number');
+    }
+
+    if (!plan.requiredResources || !Array.isArray(plan.requiredResources)) {
+      errors.push('requiredResources must be an array');
+    }
+
+    if (errors.length > 0) {
+      logger.error('Test plan validation failed:', errors);
+      throw new TraceQAError(
+        'Test plan validation failed',
+        ErrorCategory.AGENT,
+        { validationErrors: errors }
+      );
+    }
+
+    logger.debug('Test plan validation passed');
   }
 
   /**

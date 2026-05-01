@@ -26,6 +26,15 @@ export enum ProjectType {
   EXPRESS = 'express',
   FASTIFY = 'fastify',
   NEST = 'nest',
+  PYTHON = 'python',
+  FLASK = 'flask',
+  DJANGO = 'django',
+  FASTAPI = 'fastapi',
+  DOTNET = 'dotnet',
+  ASPNET = 'aspnet',
+  JAVA = 'java',
+  SPRING = 'spring',
+  GO = 'go',
   UNKNOWN = 'unknown',
 }
 
@@ -198,6 +207,51 @@ export async function detectFramework(projectPath: string): Promise<FrameworkInf
       name: 'Node.js',
       description: 'Node.js API',
     },
+    [ProjectType.PYTHON]: {
+      type: ProjectType.PYTHON,
+      name: 'Python',
+      description: 'Python application',
+    },
+    [ProjectType.FLASK]: {
+      type: ProjectType.FLASK,
+      name: 'Flask',
+      description: 'Flask Python API',
+    },
+    [ProjectType.DJANGO]: {
+      type: ProjectType.DJANGO,
+      name: 'Django',
+      description: 'Django Python application',
+    },
+    [ProjectType.FASTAPI]: {
+      type: ProjectType.FASTAPI,
+      name: 'FastAPI',
+      description: 'FastAPI Python API',
+    },
+    [ProjectType.DOTNET]: {
+      type: ProjectType.DOTNET,
+      name: '.NET',
+      description: '.NET application',
+    },
+    [ProjectType.ASPNET]: {
+      type: ProjectType.ASPNET,
+      name: 'ASP.NET',
+      description: 'ASP.NET application',
+    },
+    [ProjectType.JAVA]: {
+      type: ProjectType.JAVA,
+      name: 'Java',
+      description: 'Java application',
+    },
+    [ProjectType.SPRING]: {
+      type: ProjectType.SPRING,
+      name: 'Spring Boot',
+      description: 'Spring Boot Java application',
+    },
+    [ProjectType.GO]: {
+      type: ProjectType.GO,
+      name: 'Go',
+      description: 'Go application',
+    },
     [ProjectType.UNKNOWN]: {
       type: ProjectType.UNKNOWN,
       name: 'Unknown',
@@ -353,6 +407,15 @@ export function getDefaultPort(framework: ProjectType): number {
     [ProjectType.EXPRESS]: 3000,
     [ProjectType.FASTIFY]: 3000,
     [ProjectType.NEST]: 3000,
+    [ProjectType.PYTHON]: 5000,
+    [ProjectType.FLASK]: 5000,
+    [ProjectType.DJANGO]: 8000,
+    [ProjectType.FASTAPI]: 8000,
+    [ProjectType.DOTNET]: 5000,
+    [ProjectType.ASPNET]: 5000,
+    [ProjectType.JAVA]: 8080,
+    [ProjectType.SPRING]: 8080,
+    [ProjectType.GO]: 8080,
     [ProjectType.UNKNOWN]: 3000,
   };
 
@@ -387,42 +450,128 @@ export async function detectPortFromEnv(projectPath: string): Promise<number | n
 }
 
 /**
- * Complete project detection
+ * Detect non-Node.js projects (Python, .NET, Java, Go)
+ */
+export async function detectNonNodeProject(projectPath: string): Promise<FrameworkInfo | null> {
+  // Check for Python projects
+  if (await fileExists(path.join(projectPath, 'requirements.txt')) ||
+      await fileExists(path.join(projectPath, 'Pipfile')) ||
+      await fileExists(path.join(projectPath, 'pyproject.toml'))) {
+    
+    // Check for specific Python frameworks
+    const requirementsPath = path.join(projectPath, 'requirements.txt');
+    if (await fileExists(requirementsPath)) {
+      const fs = await import('fs');
+      const content = await fs.promises.readFile(requirementsPath, 'utf-8');
+      
+      if (content.includes('Flask')) {
+        return { type: ProjectType.FLASK, name: 'Flask', description: 'Flask Python API' };
+      }
+      if (content.includes('Django')) {
+        return { type: ProjectType.DJANGO, name: 'Django', description: 'Django Python application' };
+      }
+      if (content.includes('fastapi')) {
+        return { type: ProjectType.FASTAPI, name: 'FastAPI', description: 'FastAPI Python API' };
+      }
+    }
+    
+    return { type: ProjectType.PYTHON, name: 'Python', description: 'Python application' };
+  }
+
+  // Check for .NET projects
+  if (await fileExists(path.join(projectPath, '*.csproj')) ||
+      await fileExists(path.join(projectPath, '*.sln'))) {
+    return { type: ProjectType.DOTNET, name: '.NET', description: '.NET application' };
+  }
+
+  // Check for Java projects
+  if (await fileExists(path.join(projectPath, 'pom.xml')) ||
+      await fileExists(path.join(projectPath, 'build.gradle'))) {
+    
+    // Check for Spring
+    const pomPath = path.join(projectPath, 'pom.xml');
+    if (await fileExists(pomPath)) {
+      const fs = await import('fs');
+      const content = await fs.promises.readFile(pomPath, 'utf-8');
+      if (content.includes('spring-boot')) {
+        return { type: ProjectType.SPRING, name: 'Spring Boot', description: 'Spring Boot Java application' };
+      }
+    }
+    
+    return { type: ProjectType.JAVA, name: 'Java', description: 'Java application' };
+  }
+
+  // Check for Go projects
+  if (await fileExists(path.join(projectPath, 'go.mod'))) {
+    return { type: ProjectType.GO, name: 'Go', description: 'Go application' };
+  }
+
+  return null;
+}
+
+/**
+ * Complete project detection (now optional - returns null if no project detected)
  */
 export async function detectProject(projectPath: string): Promise<ProjectDetectionResult | null> {
   try {
     logger.info(`Detecting project configuration at: ${projectPath}`);
 
+    // First try Node.js project detection
     const packageJson = await readPackageJson(projectPath);
-    if (!packageJson) {
-      logger.error(`No package.json found at: ${projectPath}`);
-      return null;
+    
+    if (packageJson) {
+      const [framework, packageManager, buildCommands, structure] = await Promise.all([
+        detectFramework(projectPath),
+        detectPackageManager(projectPath),
+        detectBuildCommands(projectPath),
+        detectProjectStructure(projectPath),
+      ]);
+
+      const result: ProjectDetectionResult = {
+        projectRoot: projectPath,
+        framework,
+        packageManager,
+        buildCommands,
+        structure,
+        packageJson,
+      };
+
+      logger.success(
+        `Project detected: ${framework.name} with ${packageManager}`,
+        `Dev: ${buildCommands.dev || 'none'}, Build: ${buildCommands.build || 'none'}`
+      );
+
+      return result;
     }
 
-    const [framework, packageManager, buildCommands, structure] = await Promise.all([
-      detectFramework(projectPath),
-      detectPackageManager(projectPath),
-      detectBuildCommands(projectPath),
-      detectProjectStructure(projectPath),
-    ]);
+    // Try non-Node.js project detection
+    const nonNodeFramework = await detectNonNodeProject(projectPath);
+    if (nonNodeFramework) {
+      logger.success(`Non-Node.js project detected: ${nonNodeFramework.name}`);
+      
+      // Return minimal detection result for non-Node projects
+      return {
+        projectRoot: projectPath,
+        framework: nonNodeFramework,
+        packageManager: PackageManager.NPM, // Not applicable but required
+        buildCommands: {},
+        structure: {
+          hasSourceDir: false,
+          hasPublicDir: false,
+          hasTestDir: false,
+          configFiles: []
+        },
+        packageJson: {} as PackageJson
+      };
+    }
 
-    const result: ProjectDetectionResult = {
-      projectRoot: projectPath,
-      framework,
-      packageManager,
-      buildCommands,
-      structure,
-      packageJson,
-    };
-
-    logger.success(
-      `Project detected: ${framework.name} with ${packageManager}`,
-      `Dev: ${buildCommands.dev || 'none'}, Build: ${buildCommands.build || 'none'}`
-    );
-
-    return result;
+    // No project detected - this is now OK
+    logger.warn(`No project configuration detected at: ${projectPath}`);
+    logger.info('Project detection is optional. You can provide configuration via CLI flags or traceqa.config.json');
+    return null;
   } catch (error) {
-    logger.error(`Failed to detect project at: ${projectPath}`, error);
+    logger.warn(`Failed to detect project at: ${projectPath}: ${error instanceof Error ? error.message : String(error)}`);
+    logger.info('Continuing without project detection. Use CLI flags or config file to specify project details.');
     return null;
   }
 }

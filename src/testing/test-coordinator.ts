@@ -43,7 +43,7 @@ export class TestCoordinator {
   private testRunner: TestRunner;
   private apiTester: APITester | null = null;
   private webTester: WebTester | null = null;
-  private config: Required<Omit<TestCoordinatorConfig, 'baseUrl'>> & { baseUrl?: string };
+  private config: Required<Omit<TestCoordinatorConfig, 'baseUrl' | 'healthUrl'>> & { baseUrl?: string; healthUrl?: string };
   private state: TestCoordinatorState;
 
   constructor(
@@ -60,6 +60,7 @@ export class TestCoordinator {
     this.config = {
       buildSystem: {
         autoInstall: config.buildSystem?.autoInstall ?? true,
+        autoBuild: config.buildSystem?.autoBuild ?? true,
         autoStart: config.buildSystem?.autoStart ?? true,
         port: config.buildSystem?.port
       },
@@ -71,7 +72,8 @@ export class TestCoordinator {
         cleanupMCP: config.cleanup?.cleanupMCP ?? true,
         saveResults: config.cleanup?.saveResults ?? true
       },
-      baseUrl: config.baseUrl ?? undefined
+      baseUrl: config.baseUrl ?? undefined,
+      healthUrl: config.healthUrl ?? undefined
     };
 
     // Initialize test runner
@@ -197,8 +199,9 @@ export class TestCoordinator {
     logger.info('Building project...');
 
     // Install dependencies if configured
+    const skipInstall = !this.config.buildSystem.autoInstall;
     if (this.config.buildSystem.autoInstall) {
-      const installed = await this.buildSystem.installDependencies();
+      const installed = await this.buildSystem.installDependencies(skipInstall);
       if (!installed) {
         throw new TraceQAError(
           'Failed to install dependencies',
@@ -207,7 +210,20 @@ export class TestCoordinator {
       }
     }
 
+    // Build if configured
+    const skipBuild = !this.config.buildSystem.autoBuild;
+    if (this.config.buildSystem.autoBuild) {
+      const buildResult = await this.buildSystem.build({}, skipBuild);
+      if (!buildResult.success) {
+        throw new TraceQAError(
+          `Build failed: ${buildResult.error}`,
+          ErrorCategory.BUILD
+        );
+      }
+    }
+
     // Start dev server if configured and needed
+    const skipStart = !this.config.buildSystem.autoStart;
     if (
       this.config.buildSystem.autoStart &&
       (testConfig.testType === TestType.WEB_UI || testConfig.testType === TestType.BOTH)
@@ -215,7 +231,7 @@ export class TestCoordinator {
       const buildResult = await this.buildSystem.startDevServer({
         port: this.config.buildSystem.port,
         install: false // Already installed above
-      });
+      }, skipStart);
 
       if (!buildResult.success) {
         throw new TraceQAError(
@@ -232,6 +248,11 @@ export class TestCoordinator {
 
       logger.success(`Dev server started: ${buildResult.serverUrl}`);
 
+      // Run health check if healthUrl is configured
+      if (this.config.healthUrl) {
+        await this.buildSystem.waitForHealthCheck(this.config.healthUrl);
+      }
+
       return {
         success: true,
         serverUrl: buildResult.serverUrl,
@@ -239,13 +260,24 @@ export class TestCoordinator {
       };
     }
 
-    // For API-only tests, just verify build
-    const buildResult = await this.buildSystem.build();
-    if (!buildResult.success) {
-      throw new TraceQAError(
-        `Build failed: ${buildResult.error}`,
-        ErrorCategory.BUILD
-      );
+    // If baseUrl is provided without starting server, assume app is already running
+    if (this.config.baseUrl && !this.config.buildSystem.autoStart) {
+      logger.info(`Using provided base URL: ${this.config.baseUrl}`);
+      
+      // Run health check if healthUrl is configured
+      if (this.config.healthUrl) {
+        await this.buildSystem.waitForHealthCheck(this.config.healthUrl);
+      }
+      
+      this.state.buildResult = {
+        success: true,
+        serverUrl: this.config.baseUrl
+      };
+
+      return {
+        success: true,
+        serverUrl: this.config.baseUrl
+      };
     }
 
     this.state.buildResult = { success: true };
@@ -489,7 +521,16 @@ export class TestCoordinator {
         };
       }
 
-      // Execute the API test
+      // Log API test details for transparency
+      logger.info(`API Test Details:`);
+      logger.info(`  Method: ${parsedTest.method}`);
+      logger.info(`  URL: ${parsedTest.url}`);
+      if (parsedTest.body) {
+        logger.info(`  Body: ${JSON.stringify(parsedTest.body)}`);
+      }
+      logger.info(`  Assertions: ${parsedTest.assertions.length}`);
+
+      // Execute the REAL API test (no mocking)
       const apiTestResult = await this.apiTester.executeTest({
         name: testCase.name,
         request: {
@@ -504,16 +545,30 @@ export class TestCoordinator {
 
       const duration = Date.now() - startTime;
 
+      // Log response details
+      logger.info(`API Response:`);
+      logger.info(`  Status: ${apiTestResult.response?.status || 'N/A'}`);
+      logger.info(`  Duration: ${duration}ms`);
+      if (apiTestResult.response?.body) {
+        logger.debug(`  Response Body: ${JSON.stringify(apiTestResult.response.body).substring(0, 200)}...`);
+      }
+
       return {
         testCaseId: testCase.id,
         testCaseName: testCase.name,
         passed: apiTestResult.passed,
         duration,
         message: apiTestResult.passed
-          ? 'API test passed'
+          ? `API test passed - ${parsedTest.method} ${parsedTest.url} returned ${apiTestResult.response?.status || 'unknown'}`
           : `API test failed: ${apiTestResult.error || 'Assertions failed'}`,
         error: apiTestResult.error,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        logs: [
+          `Method: ${parsedTest.method}`,
+          `URL: ${parsedTest.url}`,
+          `Status: ${apiTestResult.response?.status || 'N/A'}`,
+          `Duration: ${duration}ms`
+        ]
       };
     } catch (error) {
       const duration = Date.now() - startTime;

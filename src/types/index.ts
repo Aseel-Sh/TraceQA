@@ -251,6 +251,40 @@ export interface TraceQAConfig {
 }
 
 /**
+ * TraceQA project configuration (from traceqa.config.json)
+ */
+export interface TraceQAProjectConfig {
+  // API Configuration
+  baseUrl?: string;
+  healthUrl?: string;
+  openapi?: string;
+
+  // Build Configuration
+  language?: string;
+  projectType?: string;
+  installCommand?: string;
+  buildCommand?: string;
+  startCommand?: string;
+
+  // Build Flags
+  autoInstall?: boolean;
+  autoBuild?: boolean;
+  autoStart?: boolean;
+
+  // Test Configuration
+  testType?: 'ui' | 'api' | 'both' | 'integration';
+  outputDir?: string;
+  timeout?: number;
+  retries?: number;
+
+  // IBM watsonx Configuration
+  ibmWatsonxApiKey?: string;
+  ibmWatsonxProjectId?: string;
+  ibmWatsonxUrl?: string;
+  ibmWatsonxModel?: string;
+}
+
+/**
  * MCP server configuration
  */
 export interface MCPServerConfig {
@@ -867,6 +901,7 @@ export interface TestExecutionProgress {
 export interface TestCoordinatorConfig {
   buildSystem?: {
     autoInstall?: boolean;
+    autoBuild?: boolean;
     autoStart?: boolean;
     port?: number;
   };
@@ -879,6 +914,7 @@ export interface TestCoordinatorConfig {
     saveResults?: boolean;
   };
   baseUrl?: string;
+  healthUrl?: string;
 }
 
 /**

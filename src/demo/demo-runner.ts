@@ -328,16 +328,21 @@ export class DemoRunner {
   }
 }
 
-// Allow running directly
-const args = process.argv.slice(2);
-const useMock = args.includes('--mock');
-const outputDirIndex = args.indexOf('--output-dir');
-const outputDir = outputDirIndex !== -1 ? args[outputDirIndex + 1] : undefined;
+// Allow running directly only when executed as main module
+// Check if this file is being run directly (not imported)
+const isMainModule = import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`;
 
-const runner = new DemoRunner();
-runner.runDemo({ mock: useMock, outputDir }).catch(error => {
-  console.error('Demo failed:', error);
-  process.exit(1);
-});
+if (isMainModule) {
+  const args = process.argv.slice(2);
+  const useMock = args.includes('--mock');
+  const outputDirIndex = args.indexOf('--output-dir');
+  const outputDir = outputDirIndex !== -1 ? args[outputDirIndex + 1] : undefined;
+
+  const runner = new DemoRunner();
+  runner.runDemo({ mock: useMock, outputDir }).catch(error => {
+    console.error('Demo failed:', error);
+    process.exit(1);
+  });
+}
 
 // Made with Bob

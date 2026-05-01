@@ -61,9 +61,23 @@ export class BuildSystem {
   private projectDetection: ProjectDetectionResult | null = null;
   private projectPath: string;
   private currentProcessId: string | null = null;
+  private customConfig: {
+    installCommand?: string;
+    buildCommand?: string;
+    startCommand?: string;
+    language?: string;
+    projectType?: string;
+  };
 
-  constructor(projectPath?: string) {
+  constructor(projectPath?: string, customConfig: any = {}) {
     this.projectPath = projectPath || process.cwd();
+    this.customConfig = {
+      installCommand: customConfig.installCommand,
+      buildCommand: customConfig.buildCommand,
+      startCommand: customConfig.startCommand,
+      language: customConfig.language,
+      projectType: customConfig.projectType
+    };
   }
 
   /**
@@ -73,11 +87,19 @@ export class BuildSystem {
     try {
       logger.info('Initializing build system...');
 
+      // If custom commands are provided, skip project detection
+      if (this.customConfig.installCommand || this.customConfig.buildCommand || this.customConfig.startCommand) {
+        logger.info('Using custom commands from configuration');
+        logger.debug('Custom config:', this.customConfig);
+        return true;
+      }
+
       // Find project root
       const root = await getProjectRoot(this.projectPath);
       if (!root) {
-        logger.error('Could not find project root (no package.json found)');
-        return false;
+        logger.warn('Could not find project root (no package.json found)');
+        logger.info('Continuing without project detection - custom commands may be used');
+        return true; // Don't fail if no package.json when using custom commands
       }
 
       this.projectPath = root;
@@ -85,8 +107,9 @@ export class BuildSystem {
       // Detect project configuration
       this.projectDetection = await detectProject(this.projectPath);
       if (!this.projectDetection) {
-        logger.error('Failed to detect project configuration');
-        return false;
+        logger.warn('Failed to detect project configuration');
+        logger.info('Continuing without project detection - custom commands may be used');
+        return true; // Don't fail if detection fails when using custom commands
       }
 
       logger.success(
@@ -104,10 +127,50 @@ export class BuildSystem {
   /**
    * Install dependencies
    */
-  async installDependencies(): Promise<boolean> {
+  async installDependencies(skipInstall: boolean = false): Promise<boolean> {
+    // Skip if explicitly disabled
+    if (skipInstall) {
+      logger.info('Skipping dependency installation (disabled)');
+      return true;
+    }
+
+    // Use custom install command if provided
+    if (this.customConfig.installCommand) {
+      try {
+        logger.info(`Installing dependencies: ${this.customConfig.installCommand}`);
+        
+        const [command, ...args] = this.customConfig.installCommand.split(' ');
+        const processId = 'install';
+
+        await processManager.startProcess(processId, command, args, {
+          cwd: this.projectPath,
+        });
+
+        processManager.streamProcessOutput(
+          processId,
+          (data) => logger.debug('Install stdout', data),
+          (data) => logger.debug('Install stderr', data)
+        );
+
+        const output = await processManager.getProcessOutput(processId);
+        
+        if (output?.exitCode === 0) {
+          logger.success('Dependencies installed successfully');
+          return true;
+        } else {
+          logger.error('Failed to install dependencies', output?.stderr);
+          return false;
+        }
+      } catch (error) {
+        logger.error('Failed to install dependencies', error);
+        return false;
+      }
+    }
+
+    // No custom command and no project detection
     if (!this.projectDetection) {
-      logger.error('Project not initialized');
-      return false;
+      logger.info('No install command configured, skipping dependency installation');
+      return true;
     }
 
     try {
@@ -147,8 +210,103 @@ export class BuildSystem {
   /**
    * Build project for production
    */
-  async build(options: BuildOptions = {}): Promise<BuildResult> {
+  async build(options: BuildOptions = {}, skipBuild: boolean = false): Promise<BuildResult> {
     const startTime = Date.now();
+
+    // Skip if explicitly disabled
+    if (skipBuild) {
+      logger.info('Skipping build step (disabled)');
+      return {
+        success: true,
+        buildInfo: this.createBuildInfo(true, 0),
+        duration: 0
+      };
+    }
+
+    // Use custom build command if provided
+    if (this.customConfig.buildCommand) {
+      try {
+        // Install dependencies if requested
+        if (options.install) {
+          const installed = await this.installDependencies();
+          if (!installed) {
+            return this.createErrorResult('Failed to install dependencies', startTime);
+          }
+        }
+
+        logger.info(`Building project: ${this.customConfig.buildCommand}`);
+
+        const [command, ...args] = this.customConfig.buildCommand.split(' ');
+        const processId = 'build';
+
+        await processManager.startProcess(processId, command, args, {
+          cwd: this.projectPath,
+          env: options.env,
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        processManager.streamProcessOutput(
+          processId,
+          (data) => {
+            stdout += data;
+            logger.debug('Build stdout', data);
+          },
+          (data) => {
+            stderr += data;
+            logger.debug('Build stderr', data);
+          }
+        );
+
+        const timeout = options.timeout || 300000;
+        const output = await Promise.race([
+          processManager.getProcessOutput(processId),
+          this.createTimeout(timeout),
+        ]);
+
+        const duration = Date.now() - startTime;
+
+        if (!output) {
+          return this.createErrorResult('Build timeout', startTime);
+        }
+
+        if (output.exitCode === 0) {
+          logger.success(`Build completed in ${logger.formatDuration(duration)}`);
+          return {
+            success: true,
+            buildInfo: this.createBuildInfo(true, duration, stdout),
+            duration,
+            output: stdout,
+          };
+        } else {
+          logger.error('Build failed', stderr || output.stderr);
+          return {
+            success: false,
+            buildInfo: this.createBuildInfo(false, duration, stdout, stderr),
+            duration,
+            output: stdout,
+            error: stderr || output.stderr || 'Build failed',
+          };
+        }
+      } catch (error) {
+        logger.error('Build error', error);
+        return this.createErrorResult(
+          error instanceof Error ? error.message : 'Unknown error',
+          startTime
+        );
+      }
+    }
+
+    // No custom command and no build command configured
+    if (!this.customConfig.buildCommand && !this.projectDetection) {
+      logger.info('No build command configured, skipping build step');
+      return {
+        success: true,
+        buildInfo: this.createBuildInfo(true, 0),
+        duration: 0
+      };
+    }
 
     if (!this.projectDetection) {
       return this.createErrorResult('Project not initialized', startTime);
@@ -166,7 +324,12 @@ export class BuildSystem {
       // Get build command
       const buildScript = this.projectDetection.buildCommands.build;
       if (!buildScript) {
-        return this.createErrorResult('No build script found in package.json', startTime);
+        logger.info('No build script found in package.json, skipping build');
+        return {
+          success: true,
+          buildInfo: this.createBuildInfo(true, 0),
+          duration: 0
+        };
       }
 
       const buildCmd = getBuildCommand(
@@ -241,12 +404,60 @@ export class BuildSystem {
       );
     }
   }
+  /**
+   * Wait for health check endpoint to be ready
+   */
+  async waitForHealthCheck(healthUrl: string, timeoutMs: number = 60000): Promise<boolean> {
+    logger.info(`Checking health endpoint: ${healthUrl}`);
+    
+    const startTime = Date.now();
+    const retryInterval = 2000; // 2 seconds
+    let attempts = 0;
+    
+    while (Date.now() - startTime < timeoutMs) {
+      attempts++;
+      
+      try {
+        const response = await fetch(healthUrl, {
+          method: 'GET',
+          signal: AbortSignal.timeout(5000) // 5 second timeout per request
+        });
+        
+        if (response.ok) {
+          logger.success(`Health check passed after ${attempts} attempt(s)`);
+          return true;
+        }
+        
+        logger.debug(`Health check attempt ${attempts}: ${response.status} ${response.statusText}`);
+      } catch (error) {
+        logger.debug(`Health check attempt ${attempts} failed:`, error instanceof Error ? error.message : String(error));
+      }
+      
+      // Wait before next attempt
+      await this.sleep(retryInterval);
+    }
+    
+    logger.warn(`Health check timed out after ${attempts} attempts`);
+    logger.info('Continuing anyway - application might not have a health endpoint');
+    return false; // Don't fail, just warn
+  }
+
 
   /**
    * Start development server
    */
-  async startDevServer(options: BuildOptions = {}): Promise<BuildResult> {
+  async startDevServer(options: BuildOptions = {}, skipStart: boolean = false): Promise<BuildResult> {
     const startTime = Date.now();
+    
+    // Skip if explicitly disabled
+    if (skipStart) {
+      logger.info('Skipping server start (disabled)');
+      return {
+        success: true,
+        buildInfo: this.createBuildInfo(true, 0),
+        duration: 0
+      };
+    }
 
     if (!this.projectDetection) {
       return this.createErrorResult('Project not initialized', startTime);

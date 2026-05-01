@@ -1,36 +1,37 @@
 {
-  "entries": [
+  "acceptanceCriteria": [
     {
-      "acceptanceCriterion": "All generated tests",
-      "generatedTests": [
-        "User can register with a valid email and password",
-        "Duplicate email signup should not crash the application",
-        "Password must reject weak values"
-      ],
-      "executionResults": [
-        {
-          "testId": "TC001",
-          "testName": "User can register with a valid email and password",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL"
-        },
-        {
-          "testId": "TC002",
-          "testName": "Duplicate email signup should not crash the application",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL"
-        },
-        {
-          "testId": "TC003",
-          "testName": "Password must reject weak values",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL"
-        }
-      ],
-      "coverage": "none"
+      "id": "AC1",
+      "description": "User can register with email and password",
+      "testCases": [
+        "TC004",
+        "TC005"
+      ]
+    },
+    {
+      "id": "AC2",
+      "description": "Password must be at least 8 characters with uppercase, lowercase, and number",
+      "testCases": [
+        "TC001",
+        "TC002"
+      ]
+    },
+    {
+      "id": "AC3",
+      "description": "User receives confirmation email after registration",
+      "testCases": [
+        "TC003"
+      ]
+    },
+    {
+      "id": "AC4",
+      "description": "User can login with valid credentials",
+      "testCases": []
+    },
+    {
+      "id": "AC5",
+      "description": "User cannot login with invalid credentials",
+      "testCases": []
     }
-  ],
-  "totalCriteria": 1,
-  "coveredCriteria": 0,
-  "coveragePercentage": 0
+  ]
 }

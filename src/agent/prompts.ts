@@ -102,7 +102,16 @@ Create a comprehensive test plan that:
 4. Prioritizes critical user flows${diffAnalysis ? ' and impacted areas from diff analysis' : ''}
 5. Is executable using browser automation and/or API testing
 
-Respond with a JSON object in this exact format:
+**CRITICAL JSON FORMATTING REQUIREMENTS:**
+- Return ONLY valid JSON, no markdown, no code fences, no explanatory text
+- Use double quotes for all strings, NOT single quotes
+- Request bodies must be JSON objects, NOT stringified JSON
+- Do NOT wrap response in \`\`\`json blocks or any other formatting
+- Ensure all JSON is properly escaped and valid
+- Numbers should not be quoted unless they are string values
+- Boolean values must be true/false (lowercase, unquoted)
+
+Respond with a JSON object in this EXACT format (no additional text or formatting):
 {
   "testCases": [
     {

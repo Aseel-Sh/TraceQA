@@ -16,6 +16,7 @@ import { TestCoordinator } from '../testing/test-coordinator.js';
 import { ReportGenerator } from '../reporting/index.js';
 import { AmbiguityDetector, GitAnalyzer } from '../analysis/index.js';
 import { DemoRunner } from '../demo/demo-runner.js';
+import { loadAndMergeConfig } from '../config/config-loader.js';
 
 // Package version - will be replaced during build
 const VERSION = '0.1.0';
@@ -45,6 +46,16 @@ export function createCLI(): Command {
     .option('--skip-ambiguity-check', 'Skip ambiguity analysis of acceptance criteria')
     .option('--base-branch <name>', 'Base branch for git diff comparison', 'main')
     .option('--base-url <url>', 'Base URL for API tests (e.g., http://localhost:3000)')
+    .option('--health-url <url>', 'Health check endpoint URL')
+    .option('--install-command <cmd>', 'Custom install command (e.g., "pip install -r requirements.txt")')
+    .option('--build-command <cmd>', 'Custom build command')
+    .option('--start-command <cmd>', 'Custom start command')
+    .option('--openapi <path>', 'Path to OpenAPI/Swagger spec file')
+    .option('--language <lang>', 'Project language (e.g., python, dotnet, java, go)')
+    .option('--project-type <type>', 'Project type (e.g., flask, django, aspnet, spring)')
+    .option('--no-install', 'Skip dependency installation')
+    .option('--no-build', 'Skip build step')
+    .option('--no-start', 'Skip starting the application')
     .option('--debug', 'Enable debug mode')
     .action(async (options) => {
       try {
@@ -132,6 +143,16 @@ async function handleTestCommand(options: {
   skipAmbiguityCheck?: boolean;
   baseBranch?: string;
   baseUrl?: string;
+  healthUrl?: string;
+  installCommand?: string;
+  buildCommand?: string;
+  startCommand?: string;
+  openapi?: string;
+  language?: string;
+  projectType?: string;
+  install?: boolean;
+  build?: boolean;
+  start?: boolean;
   debug?: boolean;
 }): Promise<void> {
   // Enable debug mode if requested
@@ -141,6 +162,7 @@ async function handleTestCommand(options: {
   }
 
   let config: TestConfig;
+  let projectConfig: any = {};
 
   // If all options provided, skip interactive mode
   if (options.repo && options.description) {
@@ -154,6 +176,24 @@ async function handleTestCommand(options: {
         ErrorCategory.REPOSITORY
       );
     }
+
+    // Load and merge configuration from traceqa.config.json and CLI flags
+    projectConfig = await loadAndMergeConfig(repoPath, {
+      baseUrl: options.baseUrl,
+      healthUrl: options.healthUrl,
+      installCommand: options.installCommand,
+      buildCommand: options.buildCommand,
+      startCommand: options.startCommand,
+      openapi: options.openapi,
+      language: options.language,
+      projectType: options.projectType,
+      install: options.install,
+      build: options.build,
+      start: options.start,
+      outputDir: options.outputDir
+    });
+
+    logger.debug('Merged configuration:', projectConfig);
 
     // Validate test type
     const testType = parseTestType(options.type || 'both');
@@ -185,8 +225,8 @@ async function handleTestCommand(options: {
       description: options.description,
       acceptanceCriteria,
       autoApprove: options.yes || false,
-      outputDir: options.outputDir,
-      baseUrl: options.baseUrl
+      outputDir: projectConfig.outputDir || options.outputDir,
+      baseUrl: projectConfig.baseUrl || options.baseUrl
     };
 
     logger.info('Starting tests with provided configuration...');
@@ -328,7 +368,7 @@ async function handleTestCommand(options: {
   }
 
   // Execute tests with the configuration
-  await executeTests(config, diffAnalysis);
+  await executeTests(config, diffAnalysis, projectConfig);
 }
 
 /**
@@ -360,7 +400,7 @@ function parseTestType(type: string): TestType {
 /**
  * Execute tests with the given configuration
  */
-async function executeTests(config: TestConfig, diffAnalysis: DiffAnalysis | null = null): Promise<void> {
+async function executeTests(config: TestConfig, diffAnalysis: DiffAnalysis | null = null, projectConfig: any = {}): Promise<void> {
   logger.section('Test Execution');
   
   logger.info('Configuration loaded');
@@ -390,16 +430,23 @@ async function executeTests(config: TestConfig, diffAnalysis: DiffAnalysis | nul
     );
   }
   
-  const buildSystem = new BuildSystem(config.repository.path);
+  const buildSystem = new BuildSystem(config.repository.path, projectConfig);
   const agent = new TestAgent({ apiKey });
   const mcpManager = new MCPClientManager();
   
+  // Determine autoInstall, autoBuild, autoStart from config
+  const autoInstall = projectConfig.autoInstall !== false;
+  const autoBuild = projectConfig.autoBuild !== false;
+  const autoStart = projectConfig.autoStart !== false && (config.testType === TestType.WEB_UI || config.testType === TestType.BOTH);
+  
   const coordinator = new TestCoordinator(buildSystem, agent, mcpManager, {
     buildSystem: {
-      autoInstall: true,
-      autoStart: config.testType === TestType.WEB_UI || config.testType === TestType.BOTH
+      autoInstall,
+      autoBuild,
+      autoStart
     },
-    baseUrl: config.baseUrl
+    baseUrl: config.baseUrl,
+    healthUrl: projectConfig.healthUrl
   });
 
   try {
