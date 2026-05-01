@@ -2,6 +2,7 @@ import { AmbiguityDetector } from '../analysis/ambiguity-detector';
 import { MockTestGenerator, MockTestCase } from './mock-generator';
 import { Logger } from '../utils/logger';
 import { AmbiguityIssue } from '../types';
+import { TestAgent } from '../agent/test-agent';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -30,12 +31,14 @@ export class DemoRunner {
   }
 
   async runDemo(options: DemoOptions = {}): Promise<void> {
-    const useMock = options.mock || !this.hasIBMCredentials();
+    const hasCredentials = this.hasIBMCredentials();
+    const useMock = options.mock || !hasCredentials;
+    
     if (options.outputDir) {
       this.outputDir = options.outputDir;
     }
 
-    this.printWelcome(useMock);
+    this.printWelcome(useMock, hasCredentials && options.mock);
     this.printAcceptanceCriteria();
 
     // Step 1: Analyze acceptance criteria
@@ -58,14 +61,19 @@ export class DemoRunner {
     return !!(process.env.IBM_WATSONX_API_KEY && process.env.IBM_WATSONX_PROJECT_ID);
   }
 
-  private printWelcome(useMock: boolean): void {
+  private printWelcome(useMock: boolean, forcedMock: boolean = false): void {
     console.log('\n🎭 TraceQA Demo Mode');
     console.log('━'.repeat(80));
     console.log('');
 
     if (useMock) {
-      console.log('ℹ️  Running in MOCK mode (IBM credentials not configured)');
-      console.log('   To use real IBM watsonx AI, set IBM_WATSONX_API_KEY and IBM_WATSONX_PROJECT_ID');
+      if (forcedMock) {
+        console.log('ℹ️  Running in MOCK mode (--mock flag specified)');
+        console.log('   Remove --mock flag to use real IBM watsonx AI');
+      } else {
+        console.log('ℹ️  Running in MOCK mode (IBM credentials not configured)');
+        console.log('   To use real IBM watsonx AI, set IBM_WATSONX_API_KEY and IBM_WATSONX_PROJECT_ID');
+      }
     } else {
       console.log('✨ Running with IBM watsonx AI');
     }
@@ -116,10 +124,46 @@ export class DemoRunner {
   }
 
   private async generateTestsWithAI(): Promise<MockTestCase[]> {
-    // This would use the real WatsonxClient to generate tests
-    // For now, fall back to mock generator
-    this.logger.warn('AI test generation not yet implemented, using mock generator');
-    return this.mockGenerator.generateTests(DEMO_ACCEPTANCE_CRITERIA);
+    try {
+      const apiKey = process.env.IBM_WATSONX_API_KEY;
+      if (!apiKey) {
+        throw new Error('IBM_WATSONX_API_KEY not found');
+      }
+
+      const agent = new TestAgent({ apiKey });
+      
+      // Create test context for the agent
+      const context = {
+        repository: { path: '.', name: 'demo', branch: 'main' },
+        changes: { files: [], summary: 'Demo', additions: 0, deletions: 0, diff: '' },
+        description: 'Demo test generation',
+        acceptanceCriteria: DEMO_ACCEPTANCE_CRITERIA,
+        buildInfo: { framework: 'demo', language: 'TypeScript', buildCommand: '', testCommand: '', success: true }
+      };
+      
+      // Use the agent to create a test plan
+      const testPlan = await agent.createTestPlan(context);
+      
+      this.logger.info(`AI generated ${testPlan.testCases.length} test cases`);
+      
+      // Convert TestCase[] to MockTestCase[]
+      const mockTests: MockTestCase[] = testPlan.testCases.map((tc) => ({
+        id: tc.id,
+        title: tc.name,
+        description: tc.description || tc.name,
+        steps: tc.steps.map(s => s.action),
+        expectedResult: tc.expectedResult || 'Test should pass',
+        priority: tc.priority || 'medium',
+        shouldPass: true // Assume all should pass in demo
+      }));
+      
+      return mockTests;
+      
+    } catch (error) {
+      this.logger.warn(`Failed to use IBM watsonx AI: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.info('Falling back to mock test generator');
+      return this.mockGenerator.generateTests(DEMO_ACCEPTANCE_CRITERIA);
+    }
   }
 
   private async executeTests(

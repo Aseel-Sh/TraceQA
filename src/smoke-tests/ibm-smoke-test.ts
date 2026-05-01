@@ -5,8 +5,12 @@
  * Validates IBM watsonx integration and credentials
  */
 
+import { config } from 'dotenv';
 import { WatsonxClient } from '../agent/watsonx-client';
 import chalk from 'chalk';
+
+// Load environment variables from .env file
+config();
 
 interface SmokeTestResult {
   name: string;

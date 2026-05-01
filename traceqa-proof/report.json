@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-05-01T20:28:05.089Z",
+  "timestamp": "2026-05-01T20:40:09.217Z",
   "summary": {
     "total": 9,
     "passed": 8,
@@ -26,7 +26,7 @@
       ],
       "expectedResult": "User is registered successfully and redirected to dashboard",
       "passed": true,
-      "duration": 165,
+      "duration": 100,
       "evidence": "✅ All steps executed successfully\nUser is registered successfully and redirected to dashboard"
     },
     {
@@ -41,7 +41,7 @@
       ],
       "expectedResult": "Error message displayed: \"Invalid email format\"",
       "passed": true,
-      "duration": 403,
+      "duration": 150,
       "evidence": "✅ All steps executed successfully\nError message displayed: \"Invalid email format\""
     },
     {
@@ -56,7 +56,7 @@
       ],
       "expectedResult": "Error message displayed: \"Password must be at least 8 characters with uppercase, lowercase, and number\"",
       "passed": false,
-      "duration": 449,
+      "duration": 200,
       "evidence": "❌ Test failed at step 3\nExpected: Error message displayed: \"Password must be at least 8 characters with uppercase, lowercase, and number\"\nActual: Password \"pass123\" accepted (validation not working)"
     },
     {
@@ -71,7 +71,7 @@
       ],
       "expectedResult": "Password accepted and user registered",
       "passed": true,
-      "duration": 463,
+      "duration": 100,
       "evidence": "✅ All steps executed successfully\nPassword accepted and user registered"
     },
     {
@@ -84,7 +84,7 @@
       ],
       "expectedResult": "Confirmation email received with activation link",
       "passed": true,
-      "duration": 335,
+      "duration": 150,
       "evidence": "✅ All steps executed successfully\nConfirmation email received with activation link"
     },
     {
@@ -99,7 +99,7 @@
       ],
       "expectedResult": "User is logged in and redirected to dashboard",
       "passed": true,
-      "duration": 114,
+      "duration": 200,
       "evidence": "✅ All steps executed successfully\nUser is logged in and redirected to dashboard"
     },
     {
@@ -114,7 +114,7 @@
       ],
       "expectedResult": "User is logged in and redirected to dashboard",
       "passed": true,
-      "duration": 274,
+      "duration": 100,
       "evidence": "✅ All steps executed successfully\nUser is logged in and redirected to dashboard"
     },
     {
@@ -129,7 +129,7 @@
       ],
       "expectedResult": "Error message displayed: \"Invalid credentials\"",
       "passed": true,
-      "duration": 494,
+      "duration": 150,
       "evidence": "✅ All steps executed successfully\nError message displayed: \"Invalid credentials\""
     },
     {
@@ -144,7 +144,7 @@
       ],
       "expectedResult": "Error message displayed: \"User not found\"",
       "passed": true,
-      "duration": 484,
+      "duration": 200,
       "evidence": "✅ All steps executed successfully\nError message displayed: \"User not found\""
     }
   ]

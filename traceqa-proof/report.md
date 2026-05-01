@@ -1,6 +1,6 @@
 # TraceQA Demo Test Report
 
-**Generated:** 5/1/2026, 3:28:05 PM
+**Generated:** 5/1/2026, 3:40:09 PM
 
 ## Summary
 
@@ -25,7 +25,7 @@
 
 **Priority:** high
 
-**Duration:** 165ms
+**Duration:** 100ms
 
 **Steps:**
 1. Navigate to registration page
@@ -49,7 +49,7 @@ User is registered successfully and redirected to dashboard
 
 **Priority:** high
 
-**Duration:** 403ms
+**Duration:** 150ms
 
 **Steps:**
 1. Navigate to registration page
@@ -73,7 +73,7 @@ Error message displayed: "Invalid email format"
 
 **Priority:** high
 
-**Duration:** 449ms
+**Duration:** 200ms
 
 **Steps:**
 1. Navigate to registration page
@@ -98,7 +98,7 @@ Actual: Password "pass123" accepted (validation not working)
 
 **Priority:** high
 
-**Duration:** 463ms
+**Duration:** 100ms
 
 **Steps:**
 1. Navigate to registration page
@@ -122,7 +122,7 @@ Password accepted and user registered
 
 **Priority:** medium
 
-**Duration:** 335ms
+**Duration:** 150ms
 
 **Steps:**
 1. Complete registration with valid credentials
@@ -144,7 +144,7 @@ Confirmation email received with activation link
 
 **Priority:** high
 
-**Duration:** 114ms
+**Duration:** 200ms
 
 **Steps:**
 1. Navigate to login page
@@ -168,7 +168,7 @@ User is logged in and redirected to dashboard
 
 **Priority:** high
 
-**Duration:** 274ms
+**Duration:** 100ms
 
 **Steps:**
 1. Navigate to login page
@@ -192,7 +192,7 @@ User is logged in and redirected to dashboard
 
 **Priority:** high
 
-**Duration:** 494ms
+**Duration:** 150ms
 
 **Steps:**
 1. Navigate to login page
@@ -216,7 +216,7 @@ Error message displayed: "Invalid credentials"
 
 **Priority:** high
 
-**Duration:** 484ms
+**Duration:** 200ms
 
 **Steps:**
 1. Navigate to login page

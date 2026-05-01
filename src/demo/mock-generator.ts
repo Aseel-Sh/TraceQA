@@ -173,8 +173,12 @@ export class MockTestGenerator {
     duration: number;
     evidence: string;
   }> {
-    // Simulate execution time (100-500ms)
-    const duration = Math.floor(Math.random() * 400) + 100;
+    // Use deterministic duration based on test ID
+    const testNumber = parseInt(test.id.replace('TC', ''), 10);
+    const baseDuration = 100;
+    const increment = 50;
+    const duration = baseDuration + ((testNumber - 1) % 3) * increment;
+    
     await new Promise(resolve => setTimeout(resolve, duration));
 
     const passed = test.shouldPass;

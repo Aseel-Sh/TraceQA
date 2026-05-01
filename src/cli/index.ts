@@ -61,6 +61,9 @@ export function createCLI(): Command {
     .option('-s, --show', 'Show current configuration')
     .option('-e, --edit', 'Edit configuration file')
     .option('--api-key <key>', 'Set IBM watsonx API key')
+    .option('--project-id <id>', 'Set IBM watsonx project ID')
+    .option('--url <url>', 'Set IBM watsonx URL (optional)')
+    .option('--model <model>', 'Set IBM watsonx model (optional)')
     .action(async (options) => {
       try {
         await handleConfigCommand(options);
@@ -452,21 +455,6 @@ async function executeTests(config: TestConfig, diffAnalysis: DiffAnalysis | nul
     logger.error('Test execution failed', error);
     throw error;
   }
-  logger.info('This is Phase 1 - CLI framework only');
-  logger.info('Test execution will be implemented in Phase 2-4');
-  
-  logger.newLine();
-  logger.box(
-    'TraceQA CLI is ready!\n\n' +
-    'Next steps:\n' +
-    '• Phase 2: Build system integration\n' +
-    '• Phase 3: MCP integration\n' +
-    '• Phase 4: Intelligent agent\n' +
-    '• Phase 5: Test execution',
-    'info'
-  );
-
-  displayOutro(true);
 }
 
 /**
@@ -476,6 +464,9 @@ async function handleConfigCommand(options: {
   show?: boolean;
   edit?: boolean;
   apiKey?: string;
+  projectId?: string;
+  url?: string;
+  model?: string;
 }): Promise<void> {
   logger.section('Configuration');
 
@@ -495,18 +486,37 @@ async function handleConfigCommand(options: {
     return;
   }
 
-  if (options.apiKey) {
-    // Set API key
+  // Update configuration if any options provided
+  if (options.apiKey || options.projectId || options.url || options.model) {
     let config: any = {};
     if (await fs.pathExists(configPath)) {
       config = await fs.readJSON(configPath);
     }
     
-    config.ibmWatsonxApiKey = options.apiKey;
+    if (options.apiKey) {
+      config.ibmWatsonxApiKey = options.apiKey;
+      logger.success('API key saved');
+    }
+    
+    if (options.projectId) {
+      config.ibmWatsonxProjectId = options.projectId;
+      logger.success('Project ID saved');
+    }
+    
+    if (options.url) {
+      config.ibmWatsonxUrl = options.url;
+      logger.success('URL saved');
+    }
+    
+    if (options.model) {
+      config.ibmWatsonxModel = options.model;
+      logger.success('Model saved');
+    }
+    
     await fs.ensureDir(path.dirname(configPath));
     await fs.writeJSON(configPath, config, { spaces: 2 });
     
-    logger.success('API key saved successfully');
+    logger.newLine();
     logger.info(`Configuration saved to: ${configPath}`);
     return;
   }
@@ -525,6 +535,9 @@ async function handleConfigCommand(options: {
   logger.listItem('--show: Display current configuration');
   logger.listItem('--edit: Edit configuration file');
   logger.listItem('--api-key <key>: Set IBM watsonx API key');
+  logger.listItem('--project-id <id>: Set IBM watsonx project ID');
+  logger.listItem('--url <url>: Set IBM watsonx URL (optional)');
+  logger.listItem('--model <model>: Set IBM watsonx model (optional)');
 }
 
 /**
@@ -587,6 +600,13 @@ async function handleInfoCommand(): Promise<void> {
   if (configExists) {
     const config = await fs.readJSON(configPath);
     logger.keyValue('API Key', config.ibmWatsonxApiKey ? '✓ Set' : '✗ Not set');
+    logger.keyValue('Project ID', config.ibmWatsonxProjectId ? '✓ Set' : '✗ Not set');
+    if (config.ibmWatsonxUrl) {
+      logger.keyValue('URL', config.ibmWatsonxUrl);
+    }
+    if (config.ibmWatsonxModel) {
+      logger.keyValue('Model', config.ibmWatsonxModel);
+    }
   }
 
   logger.newLine();

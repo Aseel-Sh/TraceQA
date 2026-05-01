@@ -29,6 +29,7 @@ import {
   TestExecutionOptions,
   HTTPMethod,
   AssertionType,
+  APIAssertion,
   DiffAnalysis
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
@@ -106,7 +107,7 @@ export class TestCoordinator {
       const buildResult = await this.buildProject(testConfig);
 
       // Phase 3: Create test context
-      const context = await this.createTestContext(testConfig, buildResult);
+      const context = await this.createTestContext(testConfig, buildResult, diffAnalysis);
 
       // Phase 4: Plan tests
       this.updatePhase('planning');
@@ -257,7 +258,8 @@ export class TestCoordinator {
    */
   private async createTestContext(
     testConfig: TestConfig,
-    buildResult: { success: boolean; serverUrl?: string; port?: number }
+    buildResult: { success: boolean; serverUrl?: string; port?: number },
+    diffAnalysis?: DiffAnalysis | null
   ): Promise<TestContext> {
     logger.info('Creating test context...');
 
@@ -290,8 +292,19 @@ export class TestCoordinator {
       remote: testConfig.repository.remote
     };
 
-    // Create change set (simplified - in real implementation, would use git)
-    const changes: ChangeSet = {
+    // Create change set from diffAnalysis if available
+    const changes: ChangeSet = diffAnalysis ? {
+      files: diffAnalysis.changedFiles.map(f => ({
+        path: f.path,
+        type: f.type,
+        additions: f.linesAdded,
+        deletions: f.linesDeleted
+      })),
+      summary: testConfig.description,
+      additions: diffAnalysis.changedFiles.reduce((sum, f) => sum + f.linesAdded, 0),
+      deletions: diffAnalysis.changedFiles.reduce((sum, f) => sum + f.linesDeleted, 0),
+      diff: `${diffAnalysis.changedFiles.length} files changed, ${diffAnalysis.changedFiles.reduce((sum, f) => sum + f.linesAdded, 0)} insertions(+), ${diffAnalysis.changedFiles.reduce((sum, f) => sum + f.linesDeleted, 0)} deletions(-)`
+    } : {
       files: [],
       summary: testConfig.description,
       additions: 0,
@@ -461,13 +474,10 @@ export class TestCoordinator {
         };
       }
 
-      // Extract API endpoint from test steps or build info
-      const firstStep = testCase.steps[0];
-      const apiUrl = firstStep.target || (context.buildInfo.port
-        ? `http://localhost:${context.buildInfo.port}/api/test`
-        : undefined);
-
-      if (!apiUrl) {
+      // Parse test steps to extract API test details
+      const parsedTest = this.parseAPITestSteps(testCase, context);
+      
+      if (!parsedTest.url) {
         return {
           testCaseId: testCase.id,
           testCaseName: testCase.name,
@@ -483,18 +493,13 @@ export class TestCoordinator {
       const apiTestResult = await this.apiTester.executeTest({
         name: testCase.name,
         request: {
-          method: HTTPMethod.GET,
-          url: apiUrl,
-          headers: {},
+          method: parsedTest.method,
+          url: parsedTest.url,
+          headers: parsedTest.headers,
+          body: parsedTest.body,
           timeout: 30000
         },
-        assertions: [
-          {
-            type: AssertionType.STATUS_CODE,
-            expected: 200,
-            operator: 'equals'
-          }
-        ]
+        assertions: parsedTest.assertions
       });
 
       const duration = Date.now() - startTime;
@@ -707,6 +712,101 @@ export class TestCoordinator {
         timestamp: new Date().toISOString()
       };
     }
+  }
+
+  /**
+   * Parse API test steps to extract HTTP method, URL, body, and assertions
+   */
+  private parseAPITestSteps(testCase: TestCase, context: TestContext): {
+    method: HTTPMethod;
+    url: string | undefined;
+    headers: Record<string, string>;
+    body?: any;
+    assertions: APIAssertion[];
+  } {
+    let method = HTTPMethod.GET;
+    let url: string | undefined;
+    let body: any;
+    const headers: Record<string, string> = {};
+    const assertions: APIAssertion[] = [];
+
+    // Parse test steps for API details
+    for (const step of testCase.steps) {
+      const action = step.action.toLowerCase();
+      const description = step.description.toLowerCase();
+      
+      // Extract HTTP method
+      if (action.includes('post') || description.includes('post')) {
+        method = HTTPMethod.POST;
+      } else if (action.includes('put') || description.includes('put')) {
+        method = HTTPMethod.PUT;
+      } else if (action.includes('delete') || description.includes('delete')) {
+        method = HTTPMethod.DELETE;
+      } else if (action.includes('patch') || description.includes('patch')) {
+        method = HTTPMethod.PATCH;
+      }
+      
+      // Extract URL from target or description
+      if (step.target) {
+        url = step.target;
+      } else if (description.includes('http://') || description.includes('https://')) {
+        const urlMatch = description.match(/(https?:\/\/[^\s]+)/);
+        if (urlMatch) {
+          url = urlMatch[1];
+        }
+      }
+      
+      // Extract request body from value
+      if (step.value && (method === HTTPMethod.POST || method === HTTPMethod.PUT || method === HTTPMethod.PATCH)) {
+        try {
+          body = JSON.parse(step.value);
+        } catch {
+          body = step.value;
+        }
+      }
+    }
+    
+    // If no URL found, use default from build info
+    if (!url && context.buildInfo.port) {
+      url = `http://localhost:${context.buildInfo.port}/api/test`;
+    }
+    
+    // Parse expected result for assertions
+    const expectedResult = testCase.expectedResult.toLowerCase();
+    
+    // Extract expected status code
+    let expectedStatus = 200;
+    const statusMatch = expectedResult.match(/status\s*(?:code)?\s*(\d{3})/i) ||
+                       expectedResult.match(/(\d{3})\s*(?:status|response)/i);
+    if (statusMatch) {
+      expectedStatus = parseInt(statusMatch[1], 10);
+    } else if (expectedResult.includes('success') || expectedResult.includes('ok')) {
+      expectedStatus = 200;
+    } else if (expectedResult.includes('created')) {
+      expectedStatus = 201;
+    } else if (expectedResult.includes('bad request') || expectedResult.includes('invalid')) {
+      expectedStatus = 400;
+    } else if (expectedResult.includes('unauthorized') || expectedResult.includes('not authorized')) {
+      expectedStatus = 401;
+    } else if (expectedResult.includes('forbidden')) {
+      expectedStatus = 403;
+    } else if (expectedResult.includes('not found')) {
+      expectedStatus = 404;
+    }
+    
+    assertions.push({
+      type: AssertionType.STATUS_CODE,
+      expected: expectedStatus,
+      operator: 'equals'
+    });
+    
+    // Add response body assertions if mentioned
+    if (expectedResult.includes('response') || expectedResult.includes('body') || expectedResult.includes('data')) {
+      // Could add more sophisticated parsing here
+      logger.debug('Response body assertion detected but not yet implemented');
+    }
+    
+    return { method, url, headers, body, assertions };
   }
 
   /**
