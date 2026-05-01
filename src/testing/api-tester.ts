@@ -111,8 +111,7 @@ export class APITester {
 
         if (retryCount < maxRetries) {
           logger.warn(
-            `API test error, retrying (${retryCount + 1}/${maxRetries}): ${config.name}`,
-            error
+            `API test error, retrying (${retryCount + 1}/${maxRetries}): ${config.name}: ${error instanceof Error ? error.message : String(error)}`
           );
           retryCount++;
           await this.sleep(config.retryDelay || this.defaultRetryDelay);
@@ -312,7 +311,7 @@ export class APITester {
   private async runAssertion(
     assertion: APIAssertion,
     response: APIResponse,
-    request: APIRequest
+    _request: APIRequest
   ): Promise<{ assertion: APIAssertion; passed: boolean; message: string }> {
     let passed = false;
     let message = '';

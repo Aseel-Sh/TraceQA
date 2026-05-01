@@ -5,11 +5,10 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { 
-  MCPConfig, 
-  MCPServerConfig, 
-  MCPToolRequest, 
-  MCPToolResponse,
+import {
+  MCPConfig,
+  MCPServerConfig,
+  MCPToolRequest,
   MCPConnectionStatus,
   MCPServerInfo,
   MCPOperationResult,
@@ -72,7 +71,7 @@ export class MCPClient {
 
       // Get server capabilities
       const serverInfo = await this.client.getServerVersion();
-      this.capabilities = Object.keys(serverInfo.capabilities || {});
+      this.capabilities = serverInfo?.capabilities ? Object.keys(serverInfo.capabilities) : [];
 
       this.status = MCPConnectionStatus.CONNECTED;
       this.lastConnected = new Date().toISOString();
@@ -83,7 +82,7 @@ export class MCPClient {
     } catch (error) {
       this.status = MCPConnectionStatus.ERROR;
       this.errorCount++;
-      logger.error(`Failed to connect to MCP server: ${this.serverConfig.name}`, String(error));
+      logger.error(`Failed to connect to MCP server: ${this.serverConfig.name}: ${error instanceof Error ? error.message : String(error)}`);
       throw new TraceQAError(
         `Failed to connect to MCP server: ${this.serverConfig.name}`,
         ErrorCategory.MCP,
@@ -108,7 +107,7 @@ export class MCPClient {
       this.status = MCPConnectionStatus.DISCONNECTED;
       logger.info(`Disconnected from MCP server: ${this.serverConfig.name}`);
     } catch (error) {
-      logger.error(`Error disconnecting from MCP server: ${this.serverConfig.name}`, String(error));
+      logger.error(`Error disconnecting from MCP server: ${this.serverConfig.name}: ${error instanceof Error ? error.message : String(error)}`);
       throw new TraceQAError(
         `Error disconnecting from MCP server: ${this.serverConfig.name}`,
         ErrorCategory.MCP,
@@ -157,7 +156,7 @@ export class MCPClient {
       } catch (error) {
         lastError = error as Error;
         this.errorCount++;
-        logger.warn(`Tool execution failed (attempt ${attempt}/${maxAttempts}): ${toolName}`, String(error));
+        logger.warn(`Tool execution failed (attempt ${attempt}/${maxAttempts}): ${toolName}: ${error instanceof Error ? error.message : String(error)}`);
 
         // Don't retry on last attempt
         if (attempt < maxAttempts) {
@@ -170,7 +169,7 @@ export class MCPClient {
 
     // All attempts failed
     const totalDuration = Date.now() - startTime;
-    logger.error(`Tool execution failed after ${maxAttempts} attempts: ${toolName}`, lastError?.message);
+    logger.error(`Tool execution failed after ${maxAttempts} attempts: ${toolName}: ${lastError?.message || 'Unknown error'}`);
 
     return {
       success: false,
@@ -230,7 +229,7 @@ export class MCPClient {
       }
 
       // Extract content from result
-      const content = result.content?.[0];
+      const content = Array.isArray(result.content) ? result.content[0] : undefined;
       if (!content) {
         throw new TraceQAError(
           'Tool returned no content',
@@ -311,7 +310,7 @@ export class MCPClient {
       const result = await this.client.listTools();
       return result.tools.map((tool: any) => tool.name);
     } catch (error) {
-      logger.error('Failed to list tools', String(error));
+      logger.error(`Failed to list tools: ${error instanceof Error ? error.message : String(error)}`);
       throw new TraceQAError(
         'Failed to list tools',
         ErrorCategory.MCP,
@@ -333,7 +332,7 @@ export class MCPClient {
       await this.listTools();
       return true;
     } catch (error) {
-      logger.warn('Health check failed', String(error));
+      logger.warn(`Health check failed: ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
   }
@@ -386,7 +385,7 @@ export class MCPClientManager {
         this.clients.set(serverConfig.name, client);
         logger.success(`Initialized MCP server: ${serverConfig.name}`);
       } catch (error) {
-        logger.error(`Failed to initialize MCP server: ${serverConfig.name}`, String(error));
+        logger.error(`Failed to initialize MCP server: ${serverConfig.name}: ${error instanceof Error ? error.message : String(error)}`);
         // Continue with other servers
       }
     }
@@ -430,7 +429,7 @@ export class MCPClientManager {
 
     const disconnectPromises = Array.from(this.clients.values()).map(
       client => client.disconnect().catch(error => {
-        logger.error(`Error disconnecting client: ${client.getServerName()}`, String(error));
+        logger.error(`Error disconnecting client: ${client.getServerName()}: ${error instanceof Error ? error.message : String(error)}`);
       })
     );
 

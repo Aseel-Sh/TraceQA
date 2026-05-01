@@ -69,7 +69,7 @@ export class ProcessManager {
 
       logger.info(`Starting process: ${command} ${args.join(' ')}`);
 
-      const process = execa(command, args, {
+      const childProcess = execa(command, args, {
         cwd: options.cwd || process.cwd(),
         env: { ...process.env, ...options.env },
         shell: options.shell ?? true,
@@ -79,7 +79,7 @@ export class ProcessManager {
       });
 
       const info: ProcessInfo = {
-        pid: process.pid,
+        pid: childProcess.pid,
         command,
         args,
         cwd: options.cwd || process.cwd(),
@@ -87,11 +87,11 @@ export class ProcessManager {
         status: 'running',
       };
 
-      this.processes.set(id, process);
+      this.processes.set(id, childProcess);
       this.processInfo.set(id, info);
 
       // Handle process events
-      process.on('exit', (code, signal) => {
+      childProcess.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
         const processInfo = this.processInfo.get(id);
         if (processInfo) {
           processInfo.status = code === 0 ? 'stopped' : 'failed';
@@ -99,12 +99,12 @@ export class ProcessManager {
         logger.debug(`Process ${id} exited`, { code, signal });
       });
 
-      process.on('error', (error) => {
+      childProcess.on('error', (error: Error) => {
         const processInfo = this.processInfo.get(id);
         if (processInfo) {
           processInfo.status = 'failed';
         }
-        logger.error(`Process ${id} error`, error);
+        logger.error(`Process ${id} error: ${error.message}`);
       });
 
       return info;
@@ -133,7 +133,12 @@ export class ProcessManager {
 
       // Wait for process to exit
       const exitPromise = new Promise<void>((resolve) => {
-        process.on('exit', () => resolve());
+        const childProcess = this.processes.get(id);
+        if (childProcess) {
+          childProcess.on('exit', () => resolve());
+        } else {
+          resolve();
+        }
       });
 
       const timeoutPromise = new Promise<void>((resolve) => {
@@ -194,7 +199,7 @@ export class ProcessManager {
         stdout: result.stdout || '',
         stderr: result.stderr || '',
         exitCode: result.exitCode,
-        signal: result.signal,
+        signal: result.signal || null,
       };
     } catch (error: any) {
       return {

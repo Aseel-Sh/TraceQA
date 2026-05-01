@@ -8,10 +8,8 @@ import {
   WebTestResult,
   WebTestStep,
   WebTestAction,
-  BrowserAction,
   NavigationOptions,
   SelectorOptions,
-  ScreenshotOptions,
   TraceQAError,
   ErrorCategory
 } from '../types/index.js';
@@ -100,7 +98,7 @@ export class WebTester {
               );
               screenshots.push(stepScreenshot);
             } catch (screenshotError) {
-              logger.warn('Failed to capture error screenshot', screenshotError);
+              logger.warn(`Failed to capture error screenshot: ${screenshotError instanceof Error ? screenshotError.message : String(screenshotError)}`);
             }
 
             if (!step.continueOnFailure) {

@@ -75,7 +75,7 @@ export async function initializeAgent(options: AgentInitOptions): Promise<TestAg
 
   const config: AgentConfig = {
     apiKey: options.apiKey,
-    model: options.model || 'ibm/granite-13b-chat-v2',
+    model: options.model || 'ibm/granite-3-3-8b-instruct',
     systemPrompt: options.systemPrompt || SYSTEM_PROMPT,
     maxTokens: options.maxTokens || 4096,
     temperature: options.temperature || 0.7,
@@ -160,7 +160,7 @@ export function createAgentConfigFromEnv(env?: Record<string, string | undefined
 
   return {
     apiKey,
-    model: environment.IBM_WATSONX_MODEL || 'ibm/granite-13b-chat-v2',
+    model: environment.IBM_WATSONX_MODEL || 'ibm/granite-3-3-8b-instruct',
     maxTokens: parseInt(environment.IBM_WATSONX_MAX_TOKENS || '4096', 10),
     temperature: parseFloat(environment.IBM_WATSONX_TEMPERATURE || '0.7'),
     timeout: parseInt(environment.IBM_WATSONX_TIMEOUT || '60000', 10),

@@ -47,7 +47,7 @@ Create a `.env` file or set environment variables:
 IBM_WATSONX_API_KEY=your_api_key_here
 IBM_WATSONX_PROJECT_ID=your_project_id_here
 IBM_WATSONX_URL=https://us-south.ml.cloud.ibm.com  # optional
-IBM_WATSONX_MODEL=ibm/granite-13b-chat-v2  # optional
+IBM_WATSONX_MODEL=ibm/granite-3-3-8b-instruct  # optional
 ```
 
 Get your credentials from [IBM Cloud](https://cloud.ibm.com/).
@@ -259,7 +259,7 @@ npm run dev
 | `IBM_WATSONX_API_KEY` | Yes | - | IBM watsonx.ai API key |
 | `IBM_WATSONX_PROJECT_ID` | Yes | - | IBM watsonx.ai project ID |
 | `IBM_WATSONX_URL` | No | `https://us-south.ml.cloud.ibm.com` | IBM watsonx.ai service URL |
-| `IBM_WATSONX_MODEL` | No | `ibm/granite-13b-chat-v2` | Model to use |
+| `IBM_WATSONX_MODEL` | No | `ibm/granite-3-3-8b-instruct` | Model to use |
 | `IBM_WATSONX_MAX_TOKENS` | No | `4096` | Maximum tokens per request |
 | `IBM_WATSONX_TEMPERATURE` | No | `0.7` | Model temperature |
 | `TRACEQA_LOG_LEVEL` | No | `info` | Log level (debug/info/warn/error) |

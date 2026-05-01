@@ -23,7 +23,7 @@ async function testIBMIntegration() {
   console.log('Step 1: Checking environment variables...');
   const apiKey = process.env.IBM_WATSONX_API_KEY;
   const projectId = process.env.IBM_WATSONX_PROJECT_ID;
-  const model = process.env.IBM_WATSONX_MODEL || 'ibm/granite-13b-chat-v2';
+  const model = process.env.IBM_WATSONX_MODEL || 'ibm/granite-3-3-8b-instruct';
   const serviceUrl = process.env.IBM_WATSONX_URL || 'https://us-south.ml.cloud.ibm.com';
 
   if (!apiKey) {

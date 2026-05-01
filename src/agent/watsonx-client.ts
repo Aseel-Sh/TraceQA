@@ -33,6 +33,7 @@ export class WatsonxClient {
 
   // Pricing per million tokens (estimated for IBM watsonx.ai)
   private static readonly PRICING = {
+    'ibm/granite-3-3-8b-instruct': { input: 0.5, output: 1.5 },
     'ibm/granite-13b-chat-v2': { input: 0.5, output: 1.5 },
     'ibm/granite-20b-multilingual': { input: 0.7, output: 2.0 },
     'meta-llama/llama-3-70b-instruct': { input: 1.0, output: 3.0 },
@@ -42,7 +43,7 @@ export class WatsonxClient {
   constructor(config: AgentConfig) {
     this.config = {
       apiKey: config.apiKey,
-      model: config.model || 'ibm/granite-13b-chat-v2',
+      model: config.model || 'ibm/granite-3-3-8b-instruct',
       maxTokens: config.maxTokens || 4096,
       temperature: config.temperature || 0.7,
       systemPrompt: config.systemPrompt || '',
@@ -343,8 +344,8 @@ export class WatsonxClient {
     this.tokenUsage.totalTokens = this.tokenUsage.inputTokens + this.tokenUsage.outputTokens;
 
     // Calculate estimated cost
-    const pricing = WatsonxClient.PRICING[this.model as keyof typeof WatsonxClient.PRICING] || 
-                    WatsonxClient.PRICING['ibm/granite-13b-chat-v2'];
+    const pricing = WatsonxClient.PRICING[this.model as keyof typeof WatsonxClient.PRICING] ||
+                    WatsonxClient.PRICING['ibm/granite-3-3-8b-instruct'];
     
     const inputCost = (this.tokenUsage.inputTokens / 1_000_000) * pricing.input;
     const outputCost = (this.tokenUsage.outputTokens / 1_000_000) * pricing.output;

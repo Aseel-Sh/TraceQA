@@ -9,7 +9,6 @@ import {
   SYSTEM_PROMPT,
   getTestPlanningPrompt,
   getTestExecutionPrompt,
-  getErrorAnalysisPrompt,
   getReportGenerationPrompt,
   parseJSONResponse
 } from './prompts.js';
@@ -22,7 +21,6 @@ import {
   TestResult,
   TestResults,
   TestSummary,
-  AgentDecision,
   AgentAnalysis,
   ConversationMessage,
   TokenUsage,
@@ -302,7 +300,7 @@ export class TestAgent {
    */
   private async executeSteps(
     testCase: TestCase,
-    context: TestContext
+    _context: TestContext
   ): Promise<boolean> {
     // This is a simplified implementation
     // In a real implementation, this would:
@@ -358,7 +356,7 @@ export class TestAgent {
    */
   async generateReport(
     results: TestResults,
-    analysis: AgentAnalysis,
+    _analysis: AgentAnalysis,
     context: TestContext
   ): Promise<string> {
     this.updatePhase('reporting');
@@ -500,22 +498,6 @@ Duration: ${results.duration}ms
     this.state.conversationHistory = this.watsonxClient.getHistory();
   }
 
-  /**
-   * Sleep utility
-   */
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => {
-      const start = Date.now();
-      const checkDelay = (): void => {
-        if (Date.now() - start >= ms) {
-          resolve();
-        } else {
-          Promise.resolve().then(checkDelay);
-        }
-      };
-      checkDelay();
-    });
-  }
 }
 
 /**

@@ -7,7 +7,6 @@ import { MCPClient } from './client.js';
 import {
   MCPConfig,
   MCPServerConfig,
-  BrowserAction,
   BrowserState,
   BrowserType,
   NavigationOptions,

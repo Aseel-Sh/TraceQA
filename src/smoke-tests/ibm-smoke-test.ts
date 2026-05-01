@@ -5,12 +5,12 @@
  * Validates IBM watsonx integration and credentials
  */
 
-import { config } from 'dotenv';
+import dotenv from 'dotenv';
 import { WatsonxClient } from '../agent/watsonx-client';
 import chalk from 'chalk';
 
 // Load environment variables from .env file
-config();
+dotenv.config();
 
 interface SmokeTestResult {
   name: string;
@@ -47,6 +47,9 @@ class IBMSmokeTest {
 
     const apiKey = process.env.IBM_WATSONX_API_KEY;
     const projectId = process.env.IBM_WATSONX_PROJECT_ID;
+    const model = process.env.IBM_WATSONX_MODEL || 'ibm/granite-3-3-8b-instruct';
+
+    console.log(chalk.gray(`  Model: ${model}`));
 
     if (apiKey) {
       this.addResult({
@@ -98,10 +101,14 @@ class IBMSmokeTest {
         throw new Error('Missing required environment variables');
       }
 
+      const model = process.env.IBM_WATSONX_MODEL || 'ibm/granite-3-3-8b-instruct';
+      
       const client = new WatsonxClient({
         apiKey,
-        model: 'ibm/granite-13b-chat-v2',
+        model,
       });
+      
+      console.log(chalk.gray(`  Using model: ${model}`));
       
       this.addResult({
         name: 'Client Initialization',

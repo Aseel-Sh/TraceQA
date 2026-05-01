@@ -168,7 +168,7 @@ export class DemoRunner {
 
   private async executeTests(
     testCases: MockTestCase[],
-    useMock: boolean
+    _useMock: boolean
   ): Promise<Array<{ test: MockTestCase; result: any }>> {
     console.log('⚡ Executing tests...');
 

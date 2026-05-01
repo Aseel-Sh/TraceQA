@@ -26,7 +26,6 @@ import {
   RepositoryInfo,
   TraceQAError,
   ErrorCategory,
-  TestExecutionOptions,
   HTTPMethod,
   AssertionType,
   APIAssertion,

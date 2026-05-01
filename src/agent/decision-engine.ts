@@ -8,8 +8,7 @@ import {
   TestResult,
   TestCase,
   TestContext,
-  AgentAnalysis,
-  ErrorCategory
+  AgentAnalysis
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -40,7 +39,7 @@ export class DecisionEngine {
   /**
    * Handle successful test result
    */
-  private handleSuccess(result: TestResult, testCase: TestCase): AgentDecision {
+  private handleSuccess(_result: TestResult, testCase: TestCase): AgentDecision {
     const testId = testCase.id;
     const successCount = (this.successHistory.get(testId) || 0) + 1;
     this.successHistory.set(testId, successCount);
@@ -158,7 +157,7 @@ export class DecisionEngine {
   private analyzeFailure(
     result: TestResult,
     testCase: TestCase,
-    context: TestContext
+    _context: TestContext
   ): { category: string; severity: 'critical' | 'high' | 'medium' | 'low' } {
     const error = result.error?.toLowerCase() || '';
     const message = result.message.toLowerCase();
@@ -223,7 +222,7 @@ export class DecisionEngine {
   shouldContinueExecution(
     completedTests: TestResult[],
     remainingTests: TestCase[],
-    context: TestContext
+    _context: TestContext
   ): AgentDecision {
     const totalTests = completedTests.length + remainingTests.length;
     const failedTests = completedTests.filter(t => !t.passed).length;
@@ -280,7 +279,7 @@ export class DecisionEngine {
    */
   prioritizeTests(
     testCases: TestCase[],
-    context: TestContext
+    _context: TestContext
   ): TestCase[] {
     logger.debug(`Prioritizing ${testCases.length} test cases`);
 

@@ -130,10 +130,9 @@ export async function promptRepositorySelection(): Promise<string | symbol> {
     const customPath = await p.text({
       message: 'Enter the repository path:',
       placeholder: '/path/to/repository',
-      validate: async (value) => {
+      validate: (value) => {
         if (!value) return 'Path is required';
-        if (!await fs.pathExists(value)) return 'Path does not exist';
-        if (!await isGitRepository(value)) return 'Not a git repository';
+        // Note: Synchronous validation only - path existence checked after input
         return undefined;
       }
     });
@@ -338,7 +337,7 @@ export async function collectUserInput(): Promise<UserInput | null> {
 /**
  * Show a spinner for long-running operations
  */
-export function showSpinner(message: string) {
+export function showSpinner(_message: string) {
   return p.spinner();
 }
 

@@ -285,8 +285,7 @@ export class TestRunner {
         }
 
         logger.warn(
-          `Test error, retrying (${retryCount + 1}/${this.options.retries}): ${testCase.name}`,
-          error
+          `Test error, retrying (${retryCount + 1}/${this.options.retries}): ${testCase.name}: ${error instanceof Error ? error.message : String(error)}`
         );
         retryCount++;
         await this.sleep(this.options.retryDelay);

@@ -7,8 +7,6 @@ import path from 'path';
 import {
   fileExists,
   readPackageJson,
-  readJsonFile,
-  findFileUp,
   PackageJson,
   directoryExists,
 } from '../utils/file-system.js';

@@ -3,7 +3,6 @@
  * Intelligent build system with auto-detection and process management
  */
 
-import path from 'path';
 import { logger } from '../utils/logger.js';
 import { getProjectRoot } from '../utils/file-system.js';
 import {
@@ -13,13 +12,9 @@ import {
   getDefaultPort,
   detectPortFromEnv,
   type ProjectDetectionResult,
-  type PackageManager,
-  ProjectType,
 } from './project-detector.js';
 import {
   processManager,
-  type ProcessInfo,
-  type ServerReadinessOptions,
 } from './process-manager.js';
 import { BuildInfo } from '../types/index.js';
 
