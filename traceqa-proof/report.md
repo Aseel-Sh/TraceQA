@@ -1,137 +1,190 @@
-# TraceQA Demo Test Report
+# TraceQA Test Report
 
-**Generated:** 5/1/2026, 5:35:48 PM
+**Generated**: 2026-05-01T23:10:43.069Z
+**Project**: test
+**Branch**: current
+**TraceQA Version**: 1.0.0
 
-## Summary
+## Merge Readiness: ❌ DO NOT MERGE (Score: 0/100)
 
-- **Total Tests:** 5
-- **Passed:** 5 (100.0%)
-- **Failed:** 0 (0.0%)
-- **Merge Readiness:** ✅ READY (Score: 100/100)
+### Summary
 
-## Acceptance Criteria
+- **Total Tests**: 7
+- **Passed**: 1 ✅
+- **Failed**: 6 ❌
+- **Uncertain**: 0 ❓
+- **Coverage**: 28.6%
+- **Success Rate**: 0.1%
+- **Duration**: 36974.00s
 
-1. User can register with email and password
-2. Password must be at least 8 characters with uppercase, lowercase, and number
-3. User receives confirmation email after registration
-4. User can login with valid credentials
-5. User cannot login with invalid credentials
+### Recommendation
 
-## Test Results
+Critical issues detected. Do not merge until 6 failed test(s) are resolved. Score: 0/100.
 
-### TC004: User login with valid credentials ✅ PASSED
+### Risks
 
-**Description:** Validate that a user can login with valid credentials
+- ⚠️ 6 test(s) failed
+- ⚠️ Low coverage: 28.6%
+- ⚠️ 6 critical test(s) failed (API/integration)
 
-**Priority:** high
+## Trace Matrix
 
-**Duration:** 100ms
+| Acceptance Criterion | Generated Tests | Status | Evidence |
+|---------------------|----------------|--------|----------|
+| AC-1: GET /health should return 200 with status ok. | POST /api/register returns 409 for duplicate email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 409, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3043ms |
+|  | GET /health returns 200 with status ok | ✅ passed | Logs: Method: GET, URL: http://localhost:3000/health, Expected Status: 200, Actual Status: 200, Response Body: {"status":"ok"}, Assertion Result: PASS, Duration: 2ms |
+| AC-2: POST /api/register should create a user with valid email and strong password. | POST /api/register creates a user with valid email and strong password | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 201, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3045ms |
+|  | POST /api/register rejects invalid email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 400, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3039ms |
+|  | POST /api/register rejects weak password | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 400, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3044ms |
+|  | POST /api/login allows valid credentials | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/login, Expected Status: 200, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3041ms |
+|  | POST /api/login rejects invalid credentials with 401 | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/login, Expected Status: 401, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3042ms |
+|  | POST /api/register returns 409 for duplicate email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 409, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3043ms |
+| AC-3: POST /api/register should reject invalid email. | POST /api/register creates a user with valid email and strong password | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 201, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3045ms |
+|  | POST /api/register rejects invalid email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 400, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3039ms |
+|  | POST /api/register rejects weak password | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 400, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3044ms |
+|  | POST /api/login allows valid credentials | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/login, Expected Status: 200, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3041ms |
+|  | POST /api/login rejects invalid credentials with 401 | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/login, Expected Status: 401, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3042ms |
+|  | POST /api/register returns 409 for duplicate email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 409, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3043ms |
+| AC-4: POST /api/register should reject weak password. | POST /api/register creates a user with valid email and strong password | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 201, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3045ms |
+|  | POST /api/register rejects invalid email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 400, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3039ms |
+|  | POST /api/register rejects weak password | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 400, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3044ms |
+|  | POST /api/login allows valid credentials | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/login, Expected Status: 200, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3041ms |
+|  | POST /api/login rejects invalid credentials with 401 | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/login, Expected Status: 401, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3042ms |
+|  | POST /api/register returns 409 for duplicate email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 409, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3043ms |
+| AC-5: POST /api/register should return 409 for duplicate email. | POST /api/register creates a user with valid email and strong password | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 201, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3045ms |
+|  | POST /api/register rejects invalid email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 400, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3039ms |
+|  | POST /api/register rejects weak password | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 400, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3044ms |
+|  | POST /api/login allows valid credentials | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/login, Expected Status: 200, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3041ms |
+|  | POST /api/login rejects invalid credentials with 401 | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/login, Expected Status: 401, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3042ms |
+|  | POST /api/register returns 409 for duplicate email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 409, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3043ms |
+|  | GET /health returns 200 with status ok | ✅ passed | Logs: Method: GET, URL: http://localhost:3000/health, Expected Status: 200, Actual Status: 200, Response Body: {"status":"ok"}, Assertion Result: PASS, Duration: 2ms |
+| AC-6: POST /api/login should allow valid credentials. | POST /api/register creates a user with valid email and strong password | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 201, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3045ms |
+|  | POST /api/register rejects invalid email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 400, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3039ms |
+|  | POST /api/register rejects weak password | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 400, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3044ms |
+|  | POST /api/login allows valid credentials | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/login, Expected Status: 200, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3041ms |
+|  | POST /api/login rejects invalid credentials with 401 | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/login, Expected Status: 401, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3042ms |
+|  | POST /api/register returns 409 for duplicate email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 409, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3043ms |
+| AC-7: POST /api/login should reject invalid credentials with 401. | POST /api/register creates a user with valid email and strong password | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 201, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3045ms |
+|  | POST /api/register rejects invalid email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 400, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3039ms |
+|  | POST /api/register rejects weak password | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 400, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3044ms |
+|  | POST /api/login allows valid credentials | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/login, Expected Status: 200, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3041ms |
+|  | POST /api/login rejects invalid credentials with 401 | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/login, Expected Status: 401, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3042ms |
+|  | POST /api/register returns 409 for duplicate email | ❌ failed | API test failed: Assertions failed | Logs: Method: GET, URL: http://localhost:3000/api/register, Expected Status: 409, Actual Status: 404, Response Body: {"error":"Not found"}, Assertion Result: FAIL, Duration: 3043ms |
 
-**Steps:**
-1. navigate
-2. type
-3. type
-4. click
-5. verify
+## Detailed Test Results
 
-**Expected Result:** User is logged in and redirected to the dashboard
+### ❌ POST /api/register creates a user with valid email and strong password
 
-**Evidence:**
-```
-✅ All steps executed successfully
-User is logged in and redirected to the dashboard
-```
+- **Status**: Failed
+- **Duration**: 3045.00s
+- **Timestamp**: 2026-05-01T23:10:21.728Z
+- **Message**: API test failed: Assertions failed
+
+**Logs**:
+- Method: GET
+- URL: http://localhost:3000/api/register
+- Expected Status: 201
+- Actual Status: 404
+- Response Body: {"error":"Not found"}
+- Assertion Result: FAIL
+- Duration: 3045ms
+
+### ❌ POST /api/register rejects invalid email
+
+- **Status**: Failed
+- **Duration**: 3039.00s
+- **Timestamp**: 2026-05-01T23:10:24.768Z
+- **Message**: API test failed: Assertions failed
+
+**Logs**:
+- Method: GET
+- URL: http://localhost:3000/api/register
+- Expected Status: 400
+- Actual Status: 404
+- Response Body: {"error":"Not found"}
+- Assertion Result: FAIL
+- Duration: 3039ms
+
+### ❌ POST /api/register rejects weak password
+
+- **Status**: Failed
+- **Duration**: 3044.00s
+- **Timestamp**: 2026-05-01T23:10:27.813Z
+- **Message**: API test failed: Assertions failed
+
+**Logs**:
+- Method: GET
+- URL: http://localhost:3000/api/register
+- Expected Status: 400
+- Actual Status: 404
+- Response Body: {"error":"Not found"}
+- Assertion Result: FAIL
+- Duration: 3044ms
+
+### ❌ POST /api/login allows valid credentials
+
+- **Status**: Failed
+- **Duration**: 3041.00s
+- **Timestamp**: 2026-05-01T23:10:30.856Z
+- **Message**: API test failed: Assertions failed
+
+**Logs**:
+- Method: GET
+- URL: http://localhost:3000/api/login
+- Expected Status: 200
+- Actual Status: 404
+- Response Body: {"error":"Not found"}
+- Assertion Result: FAIL
+- Duration: 3041ms
+
+### ❌ POST /api/login rejects invalid credentials with 401
+
+- **Status**: Failed
+- **Duration**: 3042.00s
+- **Timestamp**: 2026-05-01T23:10:33.898Z
+- **Message**: API test failed: Assertions failed
+
+**Logs**:
+- Method: GET
+- URL: http://localhost:3000/api/login
+- Expected Status: 401
+- Actual Status: 404
+- Response Body: {"error":"Not found"}
+- Assertion Result: FAIL
+- Duration: 3042ms
+
+### ❌ POST /api/register returns 409 for duplicate email
+
+- **Status**: Failed
+- **Duration**: 3043.00s
+- **Timestamp**: 2026-05-01T23:10:36.941Z
+- **Message**: API test failed: Assertions failed
+
+**Logs**:
+- Method: GET
+- URL: http://localhost:3000/api/register
+- Expected Status: 409
+- Actual Status: 404
+- Response Body: {"error":"Not found"}
+- Assertion Result: FAIL
+- Duration: 3043ms
+
+### ✅ GET /health returns 200 with status ok
+
+- **Status**: Passed
+- **Duration**: 2.00s
+- **Timestamp**: 2026-05-01T23:10:36.944Z
+- **Message**: API test passed - GET http://localhost:3000/health returned 200
+
+**Logs**:
+- Method: GET
+- URL: http://localhost:3000/health
+- Expected Status: 200
+- Actual Status: 200
+- Response Body: {"status":"ok"}
+- Assertion Result: PASS
+- Duration: 2ms
 
 ---
 
-### TC005: User login with invalid credentials ✅ PASSED
-
-**Description:** Validate that a user cannot login with invalid credentials
-
-**Priority:** high
-
-**Duration:** 150ms
-
-**Steps:**
-1. navigate
-2. type
-3. type
-4. click
-5. verify
-
-**Expected Result:** User remains on the login page and is not logged in
-
-**Evidence:**
-```
-✅ All steps executed successfully
-User remains on the login page and is not logged in
-```
-
----
-
-### TC001: User registration with valid credentials ✅ PASSED
-
-**Description:** Validate that a user can register with a valid email and password
-
-**Priority:** high
-
-**Duration:** 100ms
-
-**Steps:**
-1. api_call
-2. verify
-
-**Expected Result:** User is created and can be retrieved using the provided email
-
-**Evidence:**
-```
-✅ All steps executed successfully
-User is created and can be retrieved using the provided email
-```
-
----
-
-### TC002: Password complexity validation ✅ PASSED
-
-**Description:** Validate that the password must be at least 8 characters with uppercase, lowercase, and number
-
-**Priority:** high
-
-**Duration:** 150ms
-
-**Steps:**
-1. api_call
-2. verify
-
-**Expected Result:** Server returns an error indicating that the password is not complex enough
-
-**Evidence:**
-```
-✅ All steps executed successfully
-Server returns an error indicating that the password is not complex enough
-```
-
----
-
-### TC003: User receives confirmation email ✅ PASSED
-
-**Description:** Validate that a user receives a confirmation email after registration
-
-**Priority:** medium
-
-**Duration:** 200ms
-
-**Steps:**
-1. api_call
-2. verify
-
-**Expected Result:** Confirmation email is received at the provided email address
-
-**Evidence:**
-```
-✅ All steps executed successfully
-Confirmation email is received at the provided email address
-```
-
----
-
+*Report generated by TraceQA v1.0.0 on 2026-05-01T23:10:43.069Z*

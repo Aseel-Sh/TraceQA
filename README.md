@@ -6,13 +6,23 @@ TraceQA is an intelligent testing tool that helps developers validate changes be
 
 ## Features
 
+### Core Capabilities
 - 🤖 **IBM watsonx.ai Integration** - AI-powered test generation from acceptance criteria
+- ✅ **Acceptance Criteria Parsing** - Parse AC from markdown files (AC-N format, numbered lists, bullets)
 - 🔍 **Ambiguity Detection** - Identifies vague requirements and suggests improvements
-- 📊 **Requirement Trace Matrix** - Maps acceptance criteria to tests and results
+- 📊 **Requirement Trace Matrix** - Maps acceptance criteria to tests and results (one-to-one mapping)
 - 🎯 **Diff-Aware Testing** - Analyzes git changes to focus testing efforts
-- ⚡ **Real Test Execution** - Executes API tests and browser tests (with MCP)
+
+### Test Generation & Execution
+- ⚡ **Executable Test Generation** - Creates ready-to-run HTTP tests in `traceqa-generated/`
+- 🚀 **Real Test Execution** - Executes API tests with POST/PUT/PATCH body support
+- 🔄 **Multi-Step Test Execution** - Handles complex test scenarios with multiple steps
+- 🌐 **Route Discovery** - Auto-discovers API routes from Express, FastAPI, ASP.NET, Spring Boot, Go, OpenAPI
+
+### Quality & Reporting
 - 📈 **Merge Readiness Score** - Calculates merge safety based on test results
 - 📁 **Evidence Reports** - Generates JSON, Markdown, and trace matrix reports
+- 🎭 **Enhanced Approval Gate** - Preview tests before execution with detailed summaries
 - 🎭 **Demo Mode** - Try TraceQA without IBM credentials
 
 ## Installation
@@ -60,10 +70,32 @@ npm run smoke:ibm
 
 This tests your IBM watsonx.ai connection and credentials.
 
-### 4. Run Your First Test
+### 4. Create Acceptance Criteria
+
+Create an `acceptance.md` file:
+
+```markdown
+# Acceptance Criteria
+
+AC-1: User can register with valid email and strong password
+AC-2: Registration rejects invalid email formats
+AC-3: User can log in with valid credentials
+```
+
+### 5. Run Your First Test
 
 ```bash
-traceqa test -d "Add user login with email and password"
+# Basic usage with acceptance criteria
+traceqa test --repo ./my-project --criteria acceptance.md --base-url http://localhost:3000
+
+# With auto-approval
+traceqa test --repo ./my-project --criteria acceptance.md --base-url http://localhost:3000 --yes
+
+# Skip ambiguity check
+traceqa test --repo ./my-project --criteria acceptance.md --skip-ambiguity-check
+
+# Custom commands
+traceqa test --repo ./my-project --install-cmd "pip install -r requirements.txt" --start-cmd "python main.py"
 ```
 
 ## Commands
@@ -73,29 +105,35 @@ traceqa test -d "Add user login with email and password"
 Run tests based on acceptance criteria or feature description.
 
 ```bash
+# With acceptance criteria file (recommended)
+traceqa test --repo ./my-project --criteria acceptance.md --base-url http://localhost:3000
+
 # With description
 traceqa test -d "User can register with email and password"
 
-# With acceptance criteria file
-traceqa test -c ./acceptance-criteria.txt
-
-# With custom output directory
-traceqa test -d "Add payment processing" --output-dir ./qa-reports
+# With auto-approval
+traceqa test --repo ./my-project --criteria acceptance.md --base-url http://localhost:3000 --yes
 
 # Skip ambiguity check
-traceqa test -d "Feature description" --skip-ambiguity-check
+traceqa test --criteria acceptance.md --skip-ambiguity-check
+
+# Custom commands
+traceqa test --repo ./my-project --install-cmd "pip install -r requirements.txt" --start-cmd "python main.py"
 
 # Compare against specific branch
-traceqa test -d "Feature description" --base-branch develop
+traceqa test --criteria acceptance.md --base-branch develop
 
-# Auto-approve test execution
-traceqa test -d "Feature description" --yes
+# Custom output directory
+traceqa test --criteria acceptance.md --output-dir ./qa-reports
 ```
 
 **Options:**
 - `-d, --description <text>` - Feature description or acceptance criteria
-- `-c, --criteria <file>` - Path to acceptance criteria file
+- `-c, --criteria <file>` - Path to acceptance criteria file (markdown format)
 - `-r, --repo <path>` - Project repository path (default: current directory)
+- `--base-url <url>` - Base URL for API testing (e.g., http://localhost:3000)
+- `--install-cmd <command>` - Custom install command (default: auto-detected)
+- `--start-cmd <command>` - Custom start command (default: auto-detected)
 - `--output-dir <path>` - Custom output directory (default: ./traceqa-proof)
 - `--skip-ambiguity-check` - Skip ambiguity analysis
 - `--base-branch <branch>` - Git branch to compare against (default: main)
@@ -148,28 +186,130 @@ Display system and project information.
 traceqa info
 ```
 
-## Generated Reports
+## Acceptance Criteria Format
 
-TraceQA generates three files in the `traceqa-proof/` directory:
+TraceQA supports multiple acceptance criteria formats in markdown files:
 
-### 1. `report.md` - Human-Readable Report
-- Executive summary with merge readiness badge
-- Test statistics and success rate
-- Recommendation (Safe to Merge / Review Needed / Do Not Merge)
-- Risk assessment
-- Trace matrix table
-- Detailed test results
+### AC-N Format (Recommended)
+```markdown
+# Acceptance Criteria
 
-### 2. `report.json` - Machine-Readable Report
-- Complete test results
-- Trace matrix data
-- Merge readiness score
-- Metadata and timestamps
+AC-1: User can register with valid email and strong password
+AC-2: Registration rejects invalid email formats
+AC-3: User can log in with valid credentials
+```
 
-### 3. `trace-matrix.json` - Requirement Traceability
-- Maps each acceptance criterion to generated tests
-- Shows execution results with evidence
-- Coverage metrics (full/partial/none)
+### Numbered List Format
+```markdown
+# Acceptance Criteria
+
+1. User can create a new account
+2. User can log in with credentials
+3. User can reset password
+```
+
+### Bullet List Format
+```markdown
+# Acceptance Criteria
+
+- System validates email format
+- System enforces password strength
+- System prevents duplicate registrations
+```
+
+### Multi-line Criteria
+```markdown
+# Acceptance Criteria
+
+AC-1: User can register with valid email and strong password.
+The password must be at least 8 characters long and contain uppercase, lowercase, and numbers.
+
+AC-2: Registration rejects invalid email formats.
+Invalid formats include missing @ symbol, missing domain, etc.
+```
+
+## Generated Artifacts
+
+TraceQA generates two sets of artifacts:
+
+### 1. Test Generation Artifacts (`traceqa-generated/`)
+- **`qa-task-plan.json`** - Full IBM test plan with test cases
+- **`generated-http-tests.json`** - Executable HTTP tests ready to run
+- **`generated-tests.md`** - Human-readable test documentation
+- **`metadata.json`** - Generation metadata and timestamps
+
+### 2. Test Execution Reports (`traceqa-proof/`)
+- **`report.md`** - Human-readable report with merge readiness badge
+- **`report.json`** - Machine-readable report with complete test results
+- **`trace-matrix.json`** - Requirement traceability matrix (one-to-one AC-to-test mapping)
+
+## Route Discovery
+
+TraceQA automatically discovers API routes from your codebase to enhance test generation.
+
+### Supported Frameworks
+- **Express** (Node.js) - `app.get()`, `app.post()`, `router.get()`, etc.
+- **FastAPI** (Python) - `@app.get()`, `@app.post()`, `@router.get()`, etc.
+- **ASP.NET** (C#) - `[HttpGet]`, `[HttpPost]`, `[Route]` attributes
+- **Spring Boot** (Java) - `@GetMapping`, `@PostMapping`, `@RequestMapping`
+- **Go** - `net/http`, `gorilla/mux`, `gin` frameworks
+- **OpenAPI/Swagger** - Parses `openapi.json`, `swagger.json`, `openapi.yaml`
+
+### Discovery Methods
+1. **Static Analysis** - Parses source code to find route definitions
+2. **OpenAPI Specs** - Reads OpenAPI/Swagger documentation
+3. **Auto-Detection** - Automatically detects framework from project structure
+
+### Example Output
+```
+Discovered routes:
+  GET    /health
+  POST   /api/register
+  POST   /api/login
+  GET    /api/users/:id
+  PUT    /api/users/:id
+  DELETE /api/users/:id
+```
+
+Route information is used to:
+- Generate more accurate test cases
+- Validate endpoint accessibility
+- Map acceptance criteria to specific API endpoints
+
+## Example Workflow
+
+Here's a complete workflow from acceptance criteria to test execution:
+
+```bash
+# 1. Create acceptance criteria
+cat > acceptance.md << EOF
+# Acceptance Criteria
+AC-1: User can register with valid credentials
+AC-2: User can log in with valid credentials
+AC-3: System validates email format
+AC-4: System enforces password strength
+EOF
+
+# 2. Run TraceQA
+traceqa test --repo ./my-api --criteria acceptance.md --base-url http://localhost:3000
+
+# 3. Review generated tests in traceqa-generated/
+cat traceqa-generated/generated-tests.md
+
+# 4. Check proof reports in traceqa-proof/
+cat traceqa-proof/report.md
+
+# 5. Review traceability matrix
+cat traceqa-proof/trace-matrix.json
+```
+
+**What happens during execution:**
+1. ✅ Parses acceptance criteria from markdown
+2. 🔍 Discovers API routes from your codebase
+3. 🤖 Generates executable tests using IBM watsonx.ai
+4. 📝 Shows test preview with approval gate
+5. ⚡ Executes tests against your API
+6. 📊 Generates comprehensive reports with traceability
 
 ## Merge Readiness Scoring
 

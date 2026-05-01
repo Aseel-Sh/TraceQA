@@ -151,6 +151,7 @@ export interface TestResult {
   screenshots?: string[];
   logs?: string[];
   timestamp: string;
+  acceptanceCriterionId?: string;
 }
 
 /**
@@ -176,6 +177,61 @@ export interface TestResults {
   repository: RepositoryInfo;
   testPlan: TestPlan;
 }
+// ============================================================================
+// Acceptance Criteria Types
+// ============================================================================
+
+/**
+ * Parsed acceptance criterion
+ */
+export interface AcceptanceCriterion {
+  id: string;
+  description: string;
+  priority?: 'high' | 'medium' | 'low';
+}
+
+/**
+ * Parsed acceptance criteria from markdown
+ */
+export interface ParsedAcceptanceCriteria {
+  criteria: AcceptanceCriterion[];
+  rawContent: string;
+}
+
+// ============================================================================
+// Executable Test Types
+// ============================================================================
+
+/**
+ * Executable HTTP test
+ */
+export interface ExecutableHTTPTest {
+  id: string;
+  acceptanceCriterionId: string;
+  title: string;
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+  body?: any;
+  expectedStatus: number;
+  expectedBodyContains?: string[];
+  expectedBodySchema?: any;
+}
+
+/**
+ * Generated test artifacts
+ */
+export interface GeneratedTestArtifacts {
+  qaTaskPlan: any;
+  httpTests: ExecutableHTTPTest[];
+  generatedAt: string;
+  metadata: {
+    totalTests: number;
+    apiTests: number;
+    manualTests: number;
+  };
+}
+
 
 // ============================================================================
 // CLI Prompt Types

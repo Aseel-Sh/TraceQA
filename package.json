@@ -37,10 +37,12 @@
     "execa": "^8.0.1",
     "fs-extra": "^11.2.0",
     "glob": "^10.3.10",
-    "ibm-cloud-sdk-core": "^4.3.0"
+    "ibm-cloud-sdk-core": "^4.3.0",
+    "js-yaml": "^4.1.1"
   },
   "devDependencies": {
     "@types/fs-extra": "^11.0.4",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.10.0",
     "tsup": "^8.0.1",
     "tsx": "^4.7.0",

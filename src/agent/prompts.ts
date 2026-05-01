@@ -111,6 +111,12 @@ Create a comprehensive test plan that:
 - Numbers should not be quoted unless they are string values
 - Boolean values must be true/false (lowercase, unquoted)
 
+**IMPORTANT TRACEABILITY REQUIREMENTS:**
+- Each test case MUST map to a specific acceptance criterion ID (e.g., AC-1, AC-2)
+- Include the acceptanceCriterionId field in each test case
+- Ensure all acceptance criteria are covered by at least one test
+- Multiple tests can map to the same acceptance criterion for thorough coverage
+
 Respond with a JSON object in this EXACT format (no additional text or formatting):
 {
   "testCases": [
@@ -120,6 +126,7 @@ Respond with a JSON object in this EXACT format (no additional text or formattin
       "description": "What this test validates",
       "type": "ui" | "api" | "integration",
       "priority": "high" | "medium" | "low",
+      "acceptanceCriterionId": "AC-1",
       "steps": [
         {
           "action": "navigate" | "click" | "type" | "verify" | "api_call",

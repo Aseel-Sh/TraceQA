@@ -467,4 +467,115 @@ export function showInfo(message: string, details?: string): void {
   console.log();
 }
 
+/**
+ * Enhanced approval gate - shows generated tests and allows user to review
+ */
+export async function promptTestApproval(approvalData: {
+  acceptanceCriteria?: Array<{ id: string; description: string }>;
+  discoveredRoutes?: Array<{ method: string; path: string }>;
+  testPlanSummary: string;
+  generatedTestsCount: number;
+  sampleTests?: string[];
+  executorType: 'API' | 'Browser' | 'Manual';
+  estimatedTime?: string;
+  framework?: string;
+}): Promise<'approve' | 'edit' | 'skip' | 'cancel'> {
+  console.log();
+  
+  // Build the approval summary
+  const summaryLines: string[] = [
+    chalk.bold.cyan('📋 Test Generation Summary'),
+    '',
+  ];
+  
+  // Show acceptance criteria if provided
+  if (approvalData.acceptanceCriteria && approvalData.acceptanceCriteria.length > 0) {
+    summaryLines.push(chalk.bold('Acceptance Criteria:'));
+    approvalData.acceptanceCriteria.forEach(ac => {
+      summaryLines.push(chalk.gray(`  ${ac.id}:`) + ` ${ac.description}`);
+    });
+    summaryLines.push('');
+  }
+  
+  // Show discovered routes if available
+  if (approvalData.discoveredRoutes && approvalData.discoveredRoutes.length > 0) {
+    summaryLines.push(chalk.bold('Discovered Routes:'));
+    if (approvalData.framework) {
+      summaryLines.push(chalk.gray(`  Framework: ${approvalData.framework}`));
+    }
+    const routeDisplay = approvalData.discoveredRoutes.slice(0, 10); // Show first 10
+    routeDisplay.forEach(route => {
+      const methodColor = route.method === 'GET' ? chalk.green : 
+                         route.method === 'POST' ? chalk.blue :
+                         route.method === 'PUT' ? chalk.yellow :
+                         route.method === 'DELETE' ? chalk.red : chalk.white;
+      summaryLines.push(`  ${methodColor(route.method.padEnd(6))} ${chalk.gray(route.path)}`);
+    });
+    if (approvalData.discoveredRoutes.length > 10) {
+      summaryLines.push(chalk.gray(`  ... and ${approvalData.discoveredRoutes.length - 10} more routes`));
+    }
+    summaryLines.push('');
+  }
+  
+  // Show test plan summary
+  summaryLines.push(chalk.bold('Test Plan:'));
+  summaryLines.push(chalk.gray(approvalData.testPlanSummary));
+  summaryLines.push('');
+  
+  // Show generated tests info
+  summaryLines.push(chalk.bold('Generated Tests:'));
+  summaryLines.push(chalk.gray(`  Count: ${approvalData.generatedTestsCount} test(s)`));
+  summaryLines.push(chalk.gray(`  Executor: ${approvalData.executorType}`));
+  if (approvalData.estimatedTime) {
+    summaryLines.push(chalk.gray(`  Estimated Time: ${approvalData.estimatedTime}`));
+  }
+  summaryLines.push('');
+  
+  // Show sample tests if provided
+  if (approvalData.sampleTests && approvalData.sampleTests.length > 0) {
+    summaryLines.push(chalk.bold('Sample Tests:'));
+    approvalData.sampleTests.forEach((test, idx) => {
+      summaryLines.push(chalk.gray(`  ${idx + 1}. ${test}`));
+    });
+    summaryLines.push('');
+  }
+  
+  p.note(summaryLines.join('\n'), 'Review Generated Tests');
+  console.log();
+  
+  // Prompt for approval action
+  const action = await p.select({
+    message: 'What would you like to do?',
+    options: [
+      {
+        value: 'approve',
+        label: '✅ Approve and execute all tests',
+        hint: 'Run the generated tests now'
+      },
+      {
+        value: 'edit',
+        label: '📝 Edit test plan',
+        hint: 'Open generated files in editor for review'
+      },
+      {
+        value: 'skip',
+        label: '⏭️ Skip execution',
+        hint: 'Generate artifacts only, don\'t run tests'
+      },
+      {
+        value: 'cancel',
+        label: '❌ Cancel',
+        hint: 'Abort the entire operation'
+      }
+    ],
+    initialValue: 'approve'
+  });
+  
+  if (p.isCancel(action)) {
+    return 'cancel';
+  }
+  
+  return action as 'approve' | 'edit' | 'skip' | 'cancel';
+}
+
 // Made with Bob

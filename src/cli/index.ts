@@ -17,6 +17,8 @@ import { ReportGenerator } from '../reporting/index.js';
 import { AmbiguityDetector, GitAnalyzer } from '../analysis/index.js';
 import { DemoRunner } from '../demo/demo-runner.js';
 import { loadAndMergeConfig } from '../config/config-loader.js';
+import { parseAcceptanceCriteriaFromFile } from '../parsers/acceptance-parser.js';
+import { discoverRoutes, RouteDiscoveryResult } from '../discovery/route-discovery.js';
 
 // Package version - will be replaced during build
 const VERSION = '0.1.0';
@@ -43,6 +45,7 @@ export function createCLI(): Command {
     .option('-t, --type <type>', 'Test type: ui, api, or both', 'both')
     .option('-y, --yes', 'Auto-approve test plan without confirmation')
     .option('-o, --output-dir <path>', 'Output directory for reports', 'traceqa-proof')
+    .option('--criteria <file>', 'Path to acceptance criteria file (e.g., acceptance.md)')
     .option('--skip-ambiguity-check', 'Skip ambiguity analysis of acceptance criteria')
     .option('--base-branch <name>', 'Base branch for git diff comparison', 'main')
     .option('--base-url <url>', 'Base URL for API tests (e.g., http://localhost:3000)')
@@ -140,6 +143,7 @@ async function handleTestCommand(options: {
   type?: string;
   yes?: boolean;
   outputDir?: string;
+  criteria?: string;
   skipAmbiguityCheck?: boolean;
   baseBranch?: string;
   baseUrl?: string;
@@ -198,9 +202,31 @@ async function handleTestCommand(options: {
     // Validate test type
     const testType = parseTestType(options.type || 'both');
 
-    // Split multi-sentence descriptions into acceptance criteria
+    // Parse acceptance criteria from file if provided
     let acceptanceCriteria: string[] | undefined;
-    if (options.description) {
+    if (options.criteria) {
+      logger.newLine();
+      logger.section('Parsing Acceptance Criteria');
+      
+      const criteriaPath = path.resolve(options.criteria);
+      if (!await fs.pathExists(criteriaPath)) {
+        throw new TraceQAError(
+          `Acceptance criteria file does not exist: ${criteriaPath}`,
+          ErrorCategory.CONFIGURATION
+        );
+      }
+      
+      const parsed = await parseAcceptanceCriteriaFromFile(criteriaPath);
+      acceptanceCriteria = parsed.criteria.map(c => `${c.id}: ${c.description}`);
+      
+      logger.success(`✓ Parsed ${parsed.criteria.length} acceptance criteria from ${path.basename(criteriaPath)}`);
+      logger.newLine();
+      
+      parsed.criteria.forEach(criterion => {
+        logger.listItem(`${criterion.id}: ${criterion.description}`);
+      });
+    } else if (options.description) {
+      // Split multi-sentence descriptions into acceptance criteria
       // Split on period followed by space or newlines
       const sentences = options.description
         .split(/\.\s+|\n+/)
@@ -366,9 +392,44 @@ async function handleTestCommand(options: {
   } else {
     logger.info('Git diff analysis skipped (not in a git repository or no changes detected)');
   }
+  
+  // Discover routes automatically
+  logger.newLine();
+  logger.section('Discovering Routes');
+  
+  let discoveredRoutes: RouteDiscoveryResult | null = null;
+  try {
+    discoveredRoutes = await discoverRoutes(
+      config.repository.path,
+      projectConfig.projectType || projectConfig.language
+    );
+    
+    if (discoveredRoutes.routes.length > 0) {
+      logger.success(`✓ Discovered ${discoveredRoutes.routes.length} route(s) using ${discoveredRoutes.discoveryMethod}`);
+      logger.keyValue('Framework', discoveredRoutes.framework);
+      logger.newLine();
+      
+      // Show first 10 routes
+      logger.subsection('Discovered Routes (sample)');
+      const sampleRoutes = discoveredRoutes.routes.slice(0, 10);
+      sampleRoutes.forEach(route => {
+        logger.listItem(`${route.method.padEnd(6)} ${route.path}`);
+      });
+      
+      if (discoveredRoutes.routes.length > 10) {
+        logger.info(`... and ${discoveredRoutes.routes.length - 10} more routes`);
+      }
+    } else {
+      logger.info('No routes discovered automatically');
+      logger.info('You can provide an OpenAPI spec with --openapi flag');
+    }
+  } catch (error) {
+    logger.warn('Route discovery failed, continuing without route information');
+    logger.debug('Route discovery error:', error);
+  }
 
   // Execute tests with the configuration
-  await executeTests(config, diffAnalysis, projectConfig);
+  await executeTests(config, diffAnalysis, projectConfig, discoveredRoutes);
 }
 
 /**
@@ -400,7 +461,15 @@ function parseTestType(type: string): TestType {
 /**
  * Execute tests with the given configuration
  */
-async function executeTests(config: TestConfig, diffAnalysis: DiffAnalysis | null = null, projectConfig: any = {}): Promise<void> {
+async function executeTests(
+  config: TestConfig,
+  diffAnalysis: DiffAnalysis | null = null,
+  projectConfig: any = {},
+  discoveredRoutes: RouteDiscoveryResult | null = null
+): Promise<void> {
+  // TODO: Pass discoveredRoutes to test agent for enhanced test generation
+  void discoveredRoutes; // Suppress unused variable warning
+  
   logger.section('Test Execution');
   
   logger.info('Configuration loaded');

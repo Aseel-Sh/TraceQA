@@ -528,6 +528,7 @@ export class TestCoordinator {
       if (parsedTest.body) {
         logger.info(`  Body: ${JSON.stringify(parsedTest.body)}`);
       }
+      logger.info(`  Expected Status: ${parsedTest.assertions[0]?.expected || 'N/A'}`);
       logger.info(`  Assertions: ${parsedTest.assertions.length}`);
 
       // Execute the REAL API test (no mocking)
@@ -553,6 +554,23 @@ export class TestCoordinator {
         logger.debug(`  Response Body: ${JSON.stringify(apiTestResult.response.body).substring(0, 200)}...`);
       }
 
+      // Format duration properly: ms for < 1000ms, seconds for >= 1000ms
+      const formattedDuration = duration < 1000
+        ? `${duration}ms`
+        : `${(duration / 1000).toFixed(2)}s`;
+      
+      // Capture full evidence in test results
+      const evidence = [
+        `Method: ${parsedTest.method}`,
+        `URL: ${parsedTest.url}`,
+        parsedTest.body ? `Request Body: ${JSON.stringify(parsedTest.body)}` : null,
+        `Expected Status: ${parsedTest.assertions[0]?.expected || 'N/A'}`,
+        `Actual Status: ${apiTestResult.response?.status || 'N/A'}`,
+        apiTestResult.response?.body ? `Response Body: ${JSON.stringify(apiTestResult.response.body).substring(0, 500)}` : null,
+        `Assertion Result: ${apiTestResult.passed ? 'PASS' : 'FAIL'}`,
+        `Duration: ${formattedDuration}`
+      ].filter(Boolean) as string[];
+
       return {
         testCaseId: testCase.id,
         testCaseName: testCase.name,
@@ -563,15 +581,18 @@ export class TestCoordinator {
           : `API test failed: ${apiTestResult.error || 'Assertions failed'}`,
         error: apiTestResult.error,
         timestamp: new Date().toISOString(),
-        logs: [
-          `Method: ${parsedTest.method}`,
-          `URL: ${parsedTest.url}`,
-          `Status: ${apiTestResult.response?.status || 'N/A'}`,
-          `Duration: ${duration}ms`
-        ]
+        logs: evidence
       };
     } catch (error) {
       const duration = Date.now() - startTime;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Check if this is a TraceQA execution error (not an app error)
+      const isTraceQAError = errorMessage.includes('ECONNREFUSED') ||
+                             errorMessage.includes('timeout') ||
+                             errorMessage.includes('network') ||
+                             errorMessage.toLowerCase().includes('fetch');
+      
       logger.error(`API test execution error: ${testCase.name}`, error);
 
       return {
@@ -579,9 +600,15 @@ export class TestCoordinator {
         testCaseName: testCase.name,
         passed: false,
         duration,
-        message: 'API test execution failed',
-        error: error instanceof Error ? error.message : String(error),
-        timestamp: new Date().toISOString()
+        message: isTraceQAError
+          ? 'TraceQA execution error - test could not be executed'
+          : 'API test execution failed',
+        error: `${isTraceQAError ? '[TraceQA Error] ' : ''}${errorMessage}`,
+        timestamp: new Date().toISOString(),
+        logs: [
+          `Error Type: ${isTraceQAError ? 'TraceQA Execution Error' : 'Test Failure'}`,
+          `Error Message: ${errorMessage}`
+        ]
       };
     }
   }
@@ -688,10 +715,10 @@ export class TestCoordinator {
     try {
       // Integration tests orchestrate both API and Web tests
       // Split test steps into API and Web components
-      const apiSteps = testCase.steps.filter(step =>
-        step.action.toLowerCase().includes('api') ||
-        step.action.toLowerCase().includes('request')
-      );
+      const apiSteps = testCase.steps.filter(step => {
+        const action = String(step.action || '').toLowerCase();
+        return action.includes('api') || action.includes('request');
+      });
       const webSteps = testCase.steps.filter(step =>
         !apiSteps.includes(step)
       );
@@ -779,7 +806,7 @@ export class TestCoordinator {
     body?: any;
     assertions: APIAssertion[];
   } {
-    let method = HTTPMethod.GET;
+    let inferredMethod: HTTPMethod | undefined;
     let url: string | undefined;
     let body: any;
     const headers: Record<string, string> = {};
@@ -787,18 +814,31 @@ export class TestCoordinator {
 
     // Parse test steps for API details
     for (const step of testCase.steps) {
-      const action = step.action.toLowerCase();
-      const description = step.description.toLowerCase();
+      // Safe string conversion with null checks
+      const action = String(step.action || '').toLowerCase();
+      const description = String(step.description || '').toLowerCase();
       
-      // Extract HTTP method
-      if (action.includes('post') || description.includes('post')) {
-        method = HTTPMethod.POST;
-      } else if (action.includes('put') || description.includes('put')) {
-        method = HTTPMethod.PUT;
-      } else if (action.includes('delete') || description.includes('delete')) {
-        method = HTTPMethod.DELETE;
-      } else if (action.includes('patch') || description.includes('patch')) {
-        method = HTTPMethod.PATCH;
+      // CRITICAL FIX: Check step.method FIRST (IBM provides this explicitly)
+      if ((step as any).method) {
+        const methodStr = String((step as any).method).toUpperCase();
+        if (Object.values(HTTPMethod).includes(methodStr as HTTPMethod)) {
+          inferredMethod = methodStr as HTTPMethod;
+        }
+      }
+      
+      // Fallback: Extract HTTP method from action or description if not found in step.method
+      if (!inferredMethod) {
+        if (action.includes('post') || description.includes('post')) {
+          inferredMethod = HTTPMethod.POST;
+        } else if (action.includes('put') || description.includes('put')) {
+          inferredMethod = HTTPMethod.PUT;
+        } else if (action.includes('delete') || description.includes('delete')) {
+          inferredMethod = HTTPMethod.DELETE;
+        } else if (action.includes('patch') || description.includes('patch')) {
+          inferredMethod = HTTPMethod.PATCH;
+        } else if (action.includes('get') || description.includes('get')) {
+          inferredMethod = HTTPMethod.GET;
+        }
       }
       
       // Extract URL from target or description
@@ -811,8 +851,10 @@ export class TestCoordinator {
         }
       }
       
-      // Extract request body from value
-      if (step.value && (method === HTTPMethod.POST || method === HTTPMethod.PUT || method === HTTPMethod.PATCH)) {
+      // Extract request body from step.body (IBM provides this) or step.value
+      if ((step as any).body && inferredMethod && (inferredMethod === HTTPMethod.POST || inferredMethod === HTTPMethod.PUT || inferredMethod === HTTPMethod.PATCH)) {
+        body = (step as any).body;
+      } else if (step.value && inferredMethod && (inferredMethod === HTTPMethod.POST || inferredMethod === HTTPMethod.PUT || inferredMethod === HTTPMethod.PATCH)) {
         try {
           body = JSON.parse(step.value);
         } catch {
@@ -820,6 +862,9 @@ export class TestCoordinator {
         }
       }
     }
+    
+    // Robust method normalization - never call toLowerCase on undefined
+    const method = String(inferredMethod || HTTPMethod.GET).toUpperCase() as HTTPMethod;
     
     // If no URL found, use default from build info or config baseUrl
     if (!url) {
@@ -836,15 +881,16 @@ export class TestCoordinator {
       url = `http://localhost:${context.buildInfo.port}${url}`;
     }
     
-    // Parse expected result for assertions
-    const expectedResult = testCase.expectedResult.toLowerCase();
+    // Parse expected result for assertions - safe string conversion
+    const expectedResult = String(testCase.expectedResult || '').toLowerCase();
     
-    // Extract expected status code
+    // Extract expected status code from strings like "201 Created", "400 Bad Request", etc.
     let expectedStatus = 200;
-    const statusMatch = expectedResult.match(/status\s*(?:code)?\s*(\d{3})/i) ||
-                       expectedResult.match(/(\d{3})\s*(?:status|response)/i);
-    if (statusMatch) {
-      expectedStatus = parseInt(statusMatch[1], 10);
+    
+    // First try to extract any 3-digit number (status code)
+    const statusCodeMatch = expectedResult.match(/(\d{3})/);
+    if (statusCodeMatch) {
+      expectedStatus = parseInt(statusCodeMatch[1], 10);
     } else if (expectedResult.includes('success') || expectedResult.includes('ok')) {
       expectedStatus = 200;
     } else if (expectedResult.includes('created')) {
@@ -857,6 +903,8 @@ export class TestCoordinator {
       expectedStatus = 403;
     } else if (expectedResult.includes('not found')) {
       expectedStatus = 404;
+    } else if (expectedResult.includes('conflict')) {
+      expectedStatus = 409;
     }
     
     assertions.push({

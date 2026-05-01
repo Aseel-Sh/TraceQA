@@ -202,6 +202,14 @@ export class APITester {
         [HTTPMethod.POST, HTTPMethod.PUT, HTTPMethod.PATCH].includes(request.method)
       ) {
         config.data = request.body;
+        
+        // CRITICAL FIX: Add Content-Type header for JSON bodies
+        if (!config.headers) {
+          config.headers = {};
+        }
+        if (!config.headers['Content-Type'] && !config.headers['content-type']) {
+          config.headers['Content-Type'] = 'application/json';
+        }
       }
 
       // SSL validation

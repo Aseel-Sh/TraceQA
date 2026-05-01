@@ -1,0 +1,147 @@
+{
+  "id": "plan-1777676328874",
+  "testCases": [
+    {
+      "id": "test-2",
+      "name": "POST /api/register creates user with valid email and strong password",
+      "description": "This test case verifies that a POST request to the /api/register endpoint creates a user with a valid email and a strong password.",
+      "type": "api",
+      "priority": "high",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/api/register",
+          "method": "POST",
+          "body": {
+            "email": "valid_email@example.com",
+            "password": "StrongPassword123"
+          },
+          "expectedResult": "201 Created, user created with valid email and strong password"
+        }
+      ],
+      "expectedResult": "The response status code should be 201, a new user should be created with the provided email and password, and the password should meet the application's strength requirements."
+    },
+    {
+      "id": "test-3",
+      "name": "POST /api/register rejects invalid email",
+      "description": "This test case verifies that a POST request to the /api/register endpoint rejects a user creation with an invalid email.",
+      "type": "api",
+      "priority": "high",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/api/register",
+          "method": "POST",
+          "body": {
+            "email": "invalid_email",
+            "password": "StrongPassword123"
+          },
+          "expectedResult": "400 Bad Request, invalid email address error"
+        }
+      ],
+      "expectedResult": "The response status code should be 400, and the error message should indicate an invalid email address."
+    },
+    {
+      "id": "test-4",
+      "name": "POST /api/register rejects weak password",
+      "description": "This test case verifies that a POST request to the /api/register endpoint rejects a user creation with a weak password.",
+      "type": "api",
+      "priority": "high",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/api/register",
+          "method": "POST",
+          "body": {
+            "email": "valid_email@example.com",
+            "password": "weak_password"
+          },
+          "expectedResult": "400 Bad Request, weak password error"
+        }
+      ],
+      "expectedResult": "The response status code should be 400, and the error message should indicate a weak password."
+    },
+    {
+      "id": "test-5",
+      "name": "POST /api/register returns 409 for duplicate email",
+      "description": "This test case verifies that a POST request to the /api/register endpoint returns a 409 status code when attempting to create a user with an email that already exists.",
+      "type": "api",
+      "priority": "high",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/api/register",
+          "method": "POST",
+          "body": {
+            "email": "existing_email@example.com",
+            "password": "StrongPassword123"
+          },
+          "expectedResult": "409 Conflict, duplicate email address error"
+        }
+      ],
+      "expectedResult": "The response status code should be 409, and the error message should indicate a duplicate email address."
+    },
+    {
+      "id": "test-6",
+      "name": "POST /api/login allows valid credentials",
+      "description": "This test case verifies that a POST request to the /api/login endpoint allows a user to log in with valid credentials.",
+      "type": "api",
+      "priority": "high",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/api/login",
+          "method": "POST",
+          "body": {
+            "email": "valid_email@example.com",
+            "password": "StrongPassword123"
+          },
+          "expectedResult": "200 OK, user logged in successfully"
+        }
+      ],
+      "expectedResult": "The response status code should be 200, and the user should be logged in successfully."
+    },
+    {
+      "id": "test-7",
+      "name": "POST /api/login rejects invalid credentials with 401",
+      "description": "This test case verifies that a POST request to the /api/login endpoint rejects a login attempt with invalid credentials.",
+      "type": "api",
+      "priority": "high",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/api/login",
+          "method": "POST",
+          "body": {
+            "email": "invalid_email@example.com",
+            "password": "weak_password"
+          },
+          "expectedResult": "401 Unauthorized, invalid credentials error"
+        }
+      ],
+      "expectedResult": "The response status code should be 401, and the error message should indicate invalid credentials."
+    },
+    {
+      "id": "test-1",
+      "name": "GET /health returns 200 with status ok",
+      "description": "This test case verifies that the GET request to the /health endpoint returns a 200 status code with a status of 'ok'.",
+      "type": "api",
+      "priority": "medium",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/health",
+          "method": "GET",
+          "expectedResult": "200 OK, status: ok"
+        }
+      ],
+      "expectedResult": "The response status code should be 200 and the status message should be 'ok'."
+    }
+  ],
+  "estimatedDuration": 300,
+  "requiredResources": [
+    "browser",
+    "api-client"
+  ],
+  "createdAt": "2026-05-01T22:58:48.874Z"
+}

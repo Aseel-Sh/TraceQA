@@ -92,10 +92,8 @@ export class ReportGenerator {
     }
     
     for (const criterion of acceptanceCriteria) {
-      // Find tests related to this criterion
-      // For now, we'll map all tests to each criterion
-      // In a more sophisticated implementation, we'd use NLP or keywords to match
-      const relatedTests = results.results;
+      // Find tests related to this criterion using keyword matching
+      const relatedTests = this.findRelatedTests(results.results, criterion);
       
       const executionResults = relatedTests.map(test => ({
         testId: test.testCaseId,
@@ -123,6 +121,77 @@ export class ReportGenerator {
       coveredCriteria,
       coveragePercentage: (coveredCriteria / acceptanceCriteria.length) * 100
     };
+  }
+
+  /**
+   * Find tests related to a specific acceptance criterion
+   * Uses keyword matching and test metadata
+   */
+  private findRelatedTests(
+    allTests: TestResult[],
+    criterion: string
+  ): TestResult[] {
+    // If criterion is generic, return all tests
+    if (criterion.toLowerCase().includes('all generated tests') ||
+        criterion.toLowerCase().includes('all tests')) {
+      return allTests;
+    }
+
+    // Extract keywords from criterion (remove common words)
+    const commonWords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should', 'could', 'may', 'might', 'must', 'can', 'shall'];
+    const criterionWords = criterion
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(word => word.length > 2 && !commonWords.includes(word));
+
+    // Find tests that match keywords
+    const relatedTests = allTests.filter(test => {
+      const testName = test.testCaseName.toLowerCase();
+      
+      // Check if test has acceptanceCriterionId metadata (if available in future)
+      // For now, use keyword matching
+      
+      // Match if test name contains any of the criterion keywords
+      return criterionWords.some(keyword => testName.includes(keyword));
+    });
+
+    // If no tests matched by keywords, check for semantic similarity
+    // For example, "user registration" should match "register user"
+    if (relatedTests.length === 0) {
+      // Try fuzzy matching with common synonyms
+      const synonymMap: Record<string, string[]> = {
+        'register': ['registration', 'signup', 'sign-up', 'create account'],
+        'login': ['sign-in', 'signin', 'authenticate', 'log-in'],
+        'user': ['account', 'profile', 'member'],
+        'create': ['add', 'new', 'register'],
+        'delete': ['remove', 'destroy'],
+        'update': ['edit', 'modify', 'change'],
+        'retrieve': ['get', 'fetch', 'read', 'view']
+      };
+
+      for (const test of allTests) {
+        const testName = test.testCaseName.toLowerCase();
+        
+        for (const keyword of criterionWords) {
+          // Check direct match
+          if (testName.includes(keyword)) {
+            relatedTests.push(test);
+            break;
+          }
+          
+          // Check synonyms
+          const synonyms = synonymMap[keyword] || [];
+          if (synonyms.some(syn => testName.includes(syn))) {
+            relatedTests.push(test);
+            break;
+          }
+        }
+      }
+    }
+
+    // If still no matches, return empty array (criterion not covered by any test)
+    return relatedTests;
   }
 
   /**
