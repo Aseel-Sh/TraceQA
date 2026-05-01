@@ -1,9 +1,10 @@
 /**
- * TraceQA Claude API Client
- * Handles communication with Anthropic's Claude API
+ * TraceQA IBM watsonx.ai API Client
+ * Handles communication with IBM watsonx.ai API
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+import { WatsonXAI } from '@ibm-cloud/watsonx-ai';
+import { IamAuthenticator } from 'ibm-cloud-sdk-core';
 import {
   AgentConfig,
   ConversationMessage,
@@ -16,10 +17,10 @@ import {
 import { logger } from '../utils/logger.js';
 
 /**
- * Claude API client for TraceQA agent
+ * IBM watsonx.ai API client for TraceQA agent
  */
-export class ClaudeClient {
-  private client: Anthropic;
+export class WatsonxClient {
+  private client: WatsonXAI;
   private config: Required<AgentConfig>;
   private conversationHistory: ConversationMessage[] = [];
   private tokenUsage: TokenUsage = {
@@ -28,19 +29,21 @@ export class ClaudeClient {
     totalTokens: 0,
     estimatedCost: 0
   };
+  private model: string;
+  private projectId: string;
 
-  // Pricing per million tokens (as of 2024)
+  // Pricing per million tokens (estimated for IBM watsonx.ai)
   private static readonly PRICING = {
-    'claude-3-5-sonnet-20241022': { input: 3.0, output: 15.0 },
-    'claude-3-opus-20240229': { input: 15.0, output: 75.0 },
-    'claude-3-sonnet-20240229': { input: 3.0, output: 15.0 },
-    'claude-3-haiku-20240307': { input: 0.25, output: 1.25 }
+    'ibm/granite-13b-chat-v2': { input: 0.5, output: 1.5 },
+    'ibm/granite-20b-multilingual': { input: 0.7, output: 2.0 },
+    'meta-llama/llama-3-70b-instruct': { input: 1.0, output: 3.0 },
+    'meta-llama/llama-3-8b-instruct': { input: 0.3, output: 1.0 }
   };
 
   constructor(config: AgentConfig) {
     this.config = {
       apiKey: config.apiKey,
-      model: config.model || 'claude-3-5-sonnet-20241022',
+      model: config.model || 'ibm/granite-13b-chat-v2',
       maxTokens: config.maxTokens || 4096,
       temperature: config.temperature || 0.7,
       systemPrompt: config.systemPrompt || '',
@@ -50,18 +53,69 @@ export class ClaudeClient {
       streamResponses: config.streamResponses || false
     };
 
-    this.client = new Anthropic({
-      apiKey: this.config.apiKey,
-      timeout: this.config.timeout
+    // Get environment variables
+    const apiKey = this.config.apiKey || process.env.IBM_WATSONX_API_KEY || '';
+    const serviceUrl = process.env.IBM_WATSONX_URL || 'https://us-south.ml.cloud.ibm.com';
+    this.projectId = process.env.IBM_WATSONX_PROJECT_ID || '';
+    this.model = process.env.IBM_WATSONX_MODEL || this.config.model;
+
+    if (!apiKey) {
+      throw new TraceQAError(
+        'IBM_WATSONX_API_KEY is required',
+        ErrorCategory.AGENT
+      );
+    }
+
+    if (!this.projectId) {
+      throw new TraceQAError(
+        'IBM_WATSONX_PROJECT_ID is required',
+        ErrorCategory.AGENT
+      );
+    }
+
+    // Initialize IBM watsonx.ai client
+    const authenticator = new IamAuthenticator({
+      apikey: apiKey
+    });
+
+    this.client = new WatsonXAI({
+      version: '2024-05-31',
+      authenticator: authenticator,
+      serviceUrl: serviceUrl
     });
 
     this.conversationHistory = [...this.config.conversationHistory];
 
-    logger.info(`Claude client initialized with model: ${this.config.model}`);
+    logger.info(`Watsonx client initialized with model: ${this.model}`);
   }
 
   /**
-   * Send a message to Claude and get a response
+   * Convert conversation messages to watsonx input format
+   */
+  private convertMessagesToWatsonxInput(
+    messages: ConversationMessage[],
+    systemPrompt?: string
+  ): string {
+    let input = '';
+    
+    if (systemPrompt) {
+      input += `<|system|>\n${systemPrompt}\n`;
+    }
+    
+    for (const msg of messages) {
+      if (msg.role === 'user') {
+        input += `<|user|>\n${msg.content}\n`;
+      } else if (msg.role === 'assistant') {
+        input += `<|assistant|>\n${msg.content}\n`;
+      }
+    }
+    
+    input += '<|assistant|>\n';
+    return input;
+  }
+
+  /**
+   * Send a message to watsonx.ai and get a response
    */
   async sendMessage(
     message: string,
@@ -77,52 +131,53 @@ export class ClaudeClient {
       // Add user message to history
       this.addToHistory('user', message);
 
-      // Prepare messages for API
-      const messages = this.conversationHistory
-        .filter(msg => msg.role !== 'system')
-        .map(msg => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content
-        }));
+      // Prepare input for watsonx.ai
+      const input = this.convertMessagesToWatsonxInput(
+        this.conversationHistory,
+        options?.systemPrompt || this.config.systemPrompt
+      );
 
-      logger.debug(`Sending message to Claude (${messages.length} messages in history)`);
+      logger.debug(`Sending message to watsonx.ai (${this.conversationHistory.length} messages in history)`);
 
       // Make API call with retry logic
       const response = await this.withRetry(async () => {
-        return await this.client.messages.create({
-          model: this.config.model,
-          max_tokens: options?.maxTokens || this.config.maxTokens,
-          temperature: options?.temperature || this.config.temperature,
-          system: options?.systemPrompt || this.config.systemPrompt,
-          messages
+        return await this.client.generateText({
+          modelId: this.model,
+          projectId: this.projectId,
+          input: input,
+          parameters: {
+            max_new_tokens: options?.maxTokens || this.config.maxTokens,
+            temperature: options?.temperature || this.config.temperature,
+            top_p: 1,
+            top_k: 50
+          }
         });
       });
 
       // Extract response text
-      const responseText = response.content
-        .filter((block: any): block is { type: 'text'; text: string } => block.type === 'text')
-        .map(block => block.text)
-        .join('\n');
+      const responseText = response.result.results[0].generated_text;
+      const inputTokens = response.result.results[0].input_token_count || 0;
+      const outputTokens = response.result.results[0].generated_token_count || 0;
 
       // Add assistant response to history
       this.addToHistory('assistant', responseText, {
-        tokenCount: response.usage.output_tokens,
-        model: response.model,
-        finishReason: response.stop_reason || undefined
+        tokenCount: outputTokens,
+        model: this.model,
+        finishReason: response.result.results[0].stop_reason || undefined
       });
 
       // Update token usage
-      this.updateTokenUsage(response.usage.input_tokens, response.usage.output_tokens);
+      this.updateTokenUsage(inputTokens, outputTokens);
 
       const duration = Date.now() - startTime;
-      logger.success(`Received response from Claude (${duration}ms, ${response.usage.output_tokens} tokens)`);
+      logger.success(`Received response from watsonx.ai (${duration}ms, ${outputTokens} tokens)`);
 
       return responseText;
     } catch (error) {
       const duration = Date.now() - startTime;
-      logger.error(`Failed to get response from Claude (${duration}ms):`, error);
+      logger.error(`Failed to get response from watsonx.ai (${duration}ms):`, error);
       throw new TraceQAError(
-        `Claude API error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        `Watsonx API error: ${error instanceof Error ? error.message : 'Unknown error'}`,
         ErrorCategory.AGENT,
         { error, duration }
       );
@@ -146,24 +201,25 @@ export class ClaudeClient {
       // Add user message to history
       this.addToHistory('user', message);
 
-      // Prepare messages for API
-      const messages = this.conversationHistory
-        .filter(msg => msg.role !== 'system')
-        .map(msg => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content
-        }));
+      // Prepare input for watsonx.ai
+      const input = this.convertMessagesToWatsonxInput(
+        this.conversationHistory,
+        options?.systemPrompt || this.config.systemPrompt
+      );
 
-      logger.debug(`Streaming message to Claude (${messages.length} messages in history)`);
+      logger.debug(`Streaming message to watsonx.ai (${this.conversationHistory.length} messages in history)`);
 
       // Make streaming API call
-      const stream = await this.client.messages.create({
-        model: this.config.model,
-        max_tokens: options?.maxTokens || this.config.maxTokens,
-        temperature: options?.temperature || this.config.temperature,
-        system: options?.systemPrompt || this.config.systemPrompt,
-        messages,
-        stream: true
+      const stream = await this.client.generateTextStream({
+        modelId: this.model,
+        projectId: this.projectId,
+        input: input,
+        parameters: {
+          max_new_tokens: options?.maxTokens || this.config.maxTokens,
+          temperature: options?.temperature || this.config.temperature,
+          top_p: 1,
+          top_k: 50
+        }
       });
 
       let fullResponse = '';
@@ -171,33 +227,41 @@ export class ClaudeClient {
       let outputTokens = 0;
 
       for await (const chunk of stream) {
-        if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-          const text = chunk.delta.text;
-          fullResponse += text;
-          yield text;
-        } else if (chunk.type === 'message_start') {
-          inputTokens = chunk.message.usage.input_tokens;
-        } else if (chunk.type === 'message_delta') {
-          outputTokens = chunk.usage.output_tokens;
+        if (chunk.results && chunk.results.length > 0) {
+          const result = chunk.results[0];
+          
+          if (result.generated_text) {
+            const text = result.generated_text;
+            fullResponse += text;
+            yield text;
+          }
+          
+          if (result.input_token_count) {
+            inputTokens = result.input_token_count;
+          }
+          
+          if (result.generated_token_count) {
+            outputTokens = result.generated_token_count;
+          }
         }
       }
 
       // Add assistant response to history
       this.addToHistory('assistant', fullResponse, {
         tokenCount: outputTokens,
-        model: this.config.model
+        model: this.model
       });
 
       // Update token usage
       this.updateTokenUsage(inputTokens, outputTokens);
 
       const duration = Date.now() - startTime;
-      logger.success(`Completed streaming response from Claude (${duration}ms, ${outputTokens} tokens)`);
+      logger.success(`Completed streaming response from watsonx.ai (${duration}ms, ${outputTokens} tokens)`);
     } catch (error) {
       const duration = Date.now() - startTime;
-      logger.error(`Failed to stream response from Claude (${duration}ms):`, error);
+      logger.error(`Failed to stream response from watsonx.ai (${duration}ms):`, error);
       throw new TraceQAError(
-        `Claude API streaming error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        `Watsonx API streaming error: ${error instanceof Error ? error.message : 'Unknown error'}`,
         ErrorCategory.AGENT,
         { error, duration }
       );
@@ -279,8 +343,8 @@ export class ClaudeClient {
     this.tokenUsage.totalTokens = this.tokenUsage.inputTokens + this.tokenUsage.outputTokens;
 
     // Calculate estimated cost
-    const pricing = ClaudeClient.PRICING[this.config.model as keyof typeof ClaudeClient.PRICING] || 
-                    ClaudeClient.PRICING['claude-3-5-sonnet-20241022'];
+    const pricing = WatsonxClient.PRICING[this.model as keyof typeof WatsonxClient.PRICING] || 
+                    WatsonxClient.PRICING['ibm/granite-13b-chat-v2'];
     
     const inputCost = (this.tokenUsage.inputTokens / 1_000_000) * pricing.input;
     const outputCost = (this.tokenUsage.outputTokens / 1_000_000) * pricing.output;
@@ -352,14 +416,14 @@ export class ClaudeClient {
    */
   wouldExceedTokenLimit(message: string): boolean {
     const historyTokens = this.conversationHistory.reduce(
-      (sum, msg) => sum + ClaudeClient.estimateTokens(msg.content),
+      (sum, msg) => sum + WatsonxClient.estimateTokens(msg.content),
       0
     );
-    const messageTokens = ClaudeClient.estimateTokens(message);
-    const systemTokens = ClaudeClient.estimateTokens(this.config.systemPrompt);
+    const messageTokens = WatsonxClient.estimateTokens(message);
+    const systemTokens = WatsonxClient.estimateTokens(this.config.systemPrompt);
 
     const totalTokens = historyTokens + messageTokens + systemTokens;
-    const maxContextTokens = 200000; // Claude 3.5 Sonnet context window
+    const maxContextTokens = 8192; // IBM Granite context window
 
     return totalTokens > maxContextTokens;
   }
@@ -367,14 +431,14 @@ export class ClaudeClient {
   /**
    * Trim conversation history to fit within token limits
    */
-  trimHistory(maxTokens: number = 100000): void {
-    let totalTokens = ClaudeClient.estimateTokens(this.config.systemPrompt);
+  trimHistory(maxTokens: number = 6000): void {
+    let totalTokens = WatsonxClient.estimateTokens(this.config.systemPrompt);
     const trimmedHistory: ConversationMessage[] = [];
 
     // Keep most recent messages
     for (let i = this.conversationHistory.length - 1; i >= 0; i--) {
       const msg = this.conversationHistory[i];
-      const msgTokens = ClaudeClient.estimateTokens(msg.content);
+      const msgTokens = WatsonxClient.estimateTokens(msg.content);
 
       if (totalTokens + msgTokens > maxTokens) {
         break;
@@ -393,10 +457,10 @@ export class ClaudeClient {
 }
 
 /**
- * Create a Claude client with default configuration
+ * Create a Watsonx client with default configuration
  */
-export function createClaudeClient(apiKey: string, options?: Partial<AgentConfig>): ClaudeClient {
-  return new ClaudeClient({
+export function createWatsonxClient(apiKey: string, options?: Partial<AgentConfig>): WatsonxClient {
+  return new WatsonxClient({
     apiKey,
     ...options
   });

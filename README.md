@@ -2,11 +2,11 @@
 
 **Intelligent CLI tool for developer-driven QA testing**
 
-TraceQA is an AI-powered command-line tool that helps developers perform comprehensive QA testing by leveraging Claude AI and the Model Context Protocol (MCP). It provides an interactive, conversational interface for testing applications, generating test cases, and identifying potential issues.
+TraceQA is an AI-powered command-line tool that helps developers perform comprehensive QA testing by leveraging IBM watsonx.ai and the Model Context Protocol (MCP). It provides an interactive, conversational interface for testing applications, generating test cases, and identifying potential issues.
 
 ## Features
 
-- 🤖 **AI-Powered Testing**: Leverage Claude AI for intelligent test generation and execution
+- 🤖 **AI-Powered Testing**: Leverage IBM watsonx.ai for intelligent test generation and execution
 - 💬 **Interactive CLI**: Conversational interface using Clack prompts
 - 🔌 **MCP Integration**: Connect to external tools and services via Model Context Protocol
 - 📊 **Test Reporting**: Generate comprehensive test reports
@@ -16,7 +16,7 @@ TraceQA is an AI-powered command-line tool that helps developers perform compreh
 ## Prerequisites
 
 - Node.js >= 18.0.0
-- Anthropic API key (get one at https://console.anthropic.com/)
+- IBM watsonx.ai API key and Project ID (get them at https://cloud.ibm.com/)
 
 ## Installation
 
@@ -38,9 +38,10 @@ npm install
 cp .env.example .env
 ```
 
-4. Edit `.env` and add your Anthropic API key:
+4. Edit `.env` and add your IBM watsonx.ai credentials:
 ```
-ANTHROPIC_API_KEY=your_api_key_here
+IBM_WATSONX_API_KEY=your_api_key_here
+IBM_WATSONX_PROJECT_ID=your_project_id_here
 ```
 
 5. Build the project:
@@ -139,7 +140,10 @@ npm run typecheck
 TraceQA can be configured through:
 
 1. **Environment Variables** (`.env` file):
-   - `ANTHROPIC_API_KEY` - Your Anthropic API key (required)
+   - `IBM_WATSONX_API_KEY` - Your IBM watsonx.ai API key (required)
+   - `IBM_WATSONX_PROJECT_ID` - Your IBM watsonx.ai Project ID (required)
+   - `IBM_WATSONX_URL` - IBM watsonx.ai service URL (optional, defaults to https://us-south.ml.cloud.ibm.com)
+   - `IBM_WATSONX_MODEL` - Model to use (optional, defaults to ibm/granite-13b-chat-v2)
    - `MCP_SERVER_URL` - MCP server URL (optional)
 
 2. **Project Configuration** (`.traceqa/config.json`):
@@ -154,7 +158,7 @@ TraceQA can be configured through:
 ## Dependencies
 
 ### Core Dependencies
-- `@anthropic-ai/sdk` - Anthropic Claude AI SDK
+- `@ibm-cloud/watsonx-ai` - IBM watsonx.ai SDK
 - `@clack/prompts` - Beautiful CLI prompts
 - `@modelcontextprotocol/sdk` - Model Context Protocol SDK
 - `commander` - CLI framework

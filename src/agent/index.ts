@@ -4,7 +4,7 @@
  */
 
 // Export main agent classes
-export { ClaudeClient, createClaudeClient } from './claude-client.js';
+export { WatsonxClient, createWatsonxClient } from './watsonx-client.js';
 export { DecisionEngine, createDecisionEngine } from './decision-engine.js';
 export { TestAgent, createTestAgent, createTestAgentWithKey } from './test-agent.js';
 
@@ -39,7 +39,7 @@ export type {
   ReportOptions
 } from '../types/index.js';
 
-import { ClaudeClient, createClaudeClient } from './claude-client.js';
+import { WatsonxClient, createWatsonxClient } from './watsonx-client.js';
 import { DecisionEngine, createDecisionEngine } from './decision-engine.js';
 import { TestAgent, createTestAgent, createTestAgentWithKey } from './test-agent.js';
 import { SYSTEM_PROMPT } from './prompts.js';
@@ -152,20 +152,20 @@ export function createAgentConfigFromEnv(env?: Record<string, string | undefined
     }
   }
   
-  const apiKey = environment.ANTHROPIC_API_KEY;
+  const apiKey = environment.IBM_WATSONX_API_KEY;
   
   if (!apiKey) {
-    throw new Error('ANTHROPIC_API_KEY environment variable is required');
+    throw new Error('IBM_WATSONX_API_KEY environment variable is required');
   }
 
   return {
     apiKey,
-    model: environment.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022',
-    maxTokens: parseInt(environment.CLAUDE_MAX_TOKENS || '4096', 10),
-    temperature: parseFloat(environment.CLAUDE_TEMPERATURE || '0.7'),
-    timeout: parseInt(environment.CLAUDE_TIMEOUT || '60000', 10),
-    maxRetries: parseInt(environment.CLAUDE_MAX_RETRIES || '3', 10),
-    streamResponses: environment.CLAUDE_STREAM === 'true'
+    model: environment.IBM_WATSONX_MODEL || 'ibm/granite-13b-chat-v2',
+    maxTokens: parseInt(environment.IBM_WATSONX_MAX_TOKENS || '4096', 10),
+    temperature: parseFloat(environment.IBM_WATSONX_TEMPERATURE || '0.7'),
+    timeout: parseInt(environment.IBM_WATSONX_TIMEOUT || '60000', 10),
+    maxRetries: parseInt(environment.IBM_WATSONX_MAX_RETRIES || '3', 10),
+    streamResponses: environment.IBM_WATSONX_STREAM === 'true'
   };
 }
 
@@ -246,12 +246,12 @@ Token Usage:
  */
 export default {
   // Classes
-  ClaudeClient,
+  WatsonxClient,
   DecisionEngine,
   TestAgent,
 
   // Factory functions
-  createClaudeClient,
+  createWatsonxClient,
   createDecisionEngine,
   createTestAgent,
   createTestAgentWithKey,

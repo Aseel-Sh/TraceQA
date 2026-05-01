@@ -122,7 +122,7 @@ export class Logger {
   /**
    * Create a spinner for long-running operations
    */
-  public createSpinner(message: string) {
+  public createSpinner(_message: string) {
     return spinner();
   }
 

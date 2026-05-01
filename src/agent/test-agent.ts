@@ -3,7 +3,7 @@
  * Main intelligent agent that orchestrates test planning, execution, and reporting
  */
 
-import { ClaudeClient } from './claude-client.js';
+import { WatsonxClient } from './watsonx-client.js';
 import { DecisionEngine } from './decision-engine.js';
 import {
   SYSTEM_PROMPT,
@@ -37,14 +37,14 @@ import { logger } from '../utils/logger.js';
  * Main test agent for TraceQA
  */
 export class TestAgent {
-  private claudeClient: ClaudeClient;
+  private watsonxClient: WatsonxClient;
   private decisionEngine: DecisionEngine;
   private mcpManager: MCPClientManager | null = null;
   private state: AgentState;
 
   constructor(config: AgentConfig, mcpManager?: MCPClientManager) {
-    // Initialize Claude client with system prompt
-    this.claudeClient = new ClaudeClient({
+    // Initialize Watsonx client with system prompt
+    this.watsonxClient = new WatsonxClient({
       ...config,
       systemPrompt: config.systemPrompt || SYSTEM_PROMPT
     });
@@ -90,8 +90,8 @@ export class TestAgent {
       // Generate test planning prompt
       const prompt = getTestPlanningPrompt(context);
 
-      // Get response from Claude
-      const response = await this.claudeClient.sendMessage(prompt);
+      // Get response from Watsonx
+      const response = await this.watsonxClient.sendMessage(prompt);
 
       // Parse test plan from response
       const parsedPlan = parseJSONResponse<{
@@ -263,8 +263,8 @@ export class TestAgent {
         context
       );
 
-      // Get execution guidance from Claude
-      const response = await this.claudeClient.sendMessage(prompt);
+      // Get execution guidance from Watsonx
+      const response = await this.watsonxClient.sendMessage(prompt);
 
       // Execute steps (simplified - in real implementation, would use MCP)
       const passed = await this.executeSteps(testCase, context);
@@ -379,7 +379,7 @@ Duration: ${results.duration}ms
 
       const prompt = getReportGenerationPrompt(resultsText, summaryText, context);
 
-      const report = await this.claudeClient.sendMessage(prompt);
+      const report = await this.watsonxClient.sendMessage(prompt);
 
       this.updateTokenUsage();
 
@@ -447,22 +447,22 @@ Duration: ${results.duration}ms
    * Get token usage statistics
    */
   getTokenUsage(): TokenUsage {
-    return this.claudeClient.getTokenUsage();
+    return this.watsonxClient.getTokenUsage();
   }
 
   /**
    * Get conversation history
    */
   getConversationHistory(): ConversationMessage[] {
-    return this.claudeClient.getHistory();
+    return this.watsonxClient.getHistory();
   }
 
   /**
    * Reset agent state
    */
   reset(): void {
-    this.claudeClient.clearHistory();
-    this.claudeClient.resetTokenUsage();
+    this.watsonxClient.clearHistory();
+    this.watsonxClient.resetTokenUsage();
     this.decisionEngine.reset();
 
     this.state = {
@@ -496,8 +496,8 @@ Duration: ${results.duration}ms
    * Update token usage from Claude client
    */
   private updateTokenUsage(): void {
-    this.state.tokenUsage = this.claudeClient.getTokenUsage();
-    this.state.conversationHistory = this.claudeClient.getHistory();
+    this.state.tokenUsage = this.watsonxClient.getTokenUsage();
+    this.state.conversationHistory = this.watsonxClient.getHistory();
   }
 
   /**

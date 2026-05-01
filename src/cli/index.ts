@@ -4,7 +4,6 @@
  */
 
 import { Command } from 'commander';
-import chalk from 'chalk';
 import { collectUserInput, displayOutro, showError } from './prompts.js';
 import { logger } from '../utils/logger.js';
 import { TestConfig, TestType, TraceQAError, ErrorCategory } from '../types/index.js';
