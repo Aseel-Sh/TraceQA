@@ -27,6 +27,7 @@ export interface TestConfig {
   acceptanceCriteria?: string[];
   branch?: string;
   autoApprove?: boolean;
+  outputDir?: string;
 }
 
 // ============================================================================
@@ -239,7 +240,7 @@ export class TraceQAError extends Error {
  * TraceQA configuration
  */
 export interface TraceQAConfig {
-  anthropicApiKey?: string;
+  ibmWatsonxApiKey?: string;
   defaultRepository?: string;
   mcpServers?: MCPServerConfig[];
   testTimeout?: number;
@@ -338,35 +339,29 @@ export interface AgentMessage {
 }
 
 /**
- * Claude API response
+ * IBM watsonx.ai API response
  */
-export interface ClaudeResponse {
-  id: string;
-  type: 'message';
-  role: 'assistant';
-  content: Array<{
-    type: 'text';
-    text: string;
+export interface WatsonxResponse {
+  model_id: string;
+  created_at: string;
+  results: Array<{
+    generated_text: string;
+    generated_token_count: number;
+    input_token_count: number;
+    stop_reason: string;
   }>;
-  model: string;
-  stop_reason: string | null;
-  stop_sequence: string | null;
-  usage: {
-    input_tokens: number;
-    output_tokens: number;
-  };
 }
 
 /**
- * Claude API streaming chunk
+ * IBM watsonx.ai streaming chunk
  */
-export interface ClaudeStreamChunk {
-  type: 'message_start' | 'content_block_start' | 'content_block_delta' | 'content_block_stop' | 'message_delta' | 'message_stop';
-  message?: Partial<ClaudeResponse>;
-  delta?: {
-    type: 'text_delta';
-    text: string;
-  };
+export interface WatsonxStreamChunk {
+  results?: Array<{
+    generated_text?: string;
+    generated_token_count?: number;
+    input_token_count?: number;
+    stop_reason?: string;
+  }>;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
@@ -974,5 +969,102 @@ export interface WebTestResult {
   duration: number;
   timestamp: string;
 }
+
+// ============================================================================
+// Reporting Types
+// ============================================================================
+
+/**
+ * Trace matrix entry mapping acceptance criteria to tests
+ */
+export interface TraceMatrixEntry {
+  acceptanceCriterion: string;
+  generatedTests: string[];
+  executionResults: {
+    testId: string;
+    testName: string;
+    status: 'passed' | 'failed' | 'uncertain';
+    evidence?: string;
+  }[];
+  coverage: 'full' | 'partial' | 'none';
+}
+
+/**
+ * Complete trace matrix for requirement traceability
+ */
+export interface TraceMatrix {
+  entries: TraceMatrixEntry[];
+  totalCriteria: number;
+  coveredCriteria: number;
+  coveragePercentage: number;
+}
+
+/**
+ * Merge readiness assessment score
+ */
+export interface MergeReadinessScore {
+  score: number; // 0-100
+  recommendation: 'safe_to_merge' | 'review_needed' | 'do_not_merge';
+  factors: {
+    passedTests: number;
+    failedTests: number;
+    uncertainTests: number;
+    coveragePercentage: number;
+    criticalFailures: number;
+  };
+  risks: string[];
+  summary: string;
+}
+
+/**
+ * Complete report data structure
+ */
+export interface ReportData {
+  metadata: {
+    generatedAt: string;
+    traceqaVersion: string;
+    projectName: string;
+    repository: RepositoryInfo;
+  };
+  testResults: TestResults;
+  traceMatrix: TraceMatrix;
+  mergeReadiness: MergeReadinessScore;
+}
+/**
+ * Ambiguity detection types
+ */
+export interface AmbiguityIssue {
+  criterion: string;
+  issue: string;
+  vagueTerms: string[];
+  suggestion: string;
+  severity: 'high' | 'medium' | 'low';
+}
+
+export interface AmbiguityAnalysis {
+  totalCriteria: number;
+  issuesFound: number;
+  issues: AmbiguityIssue[];
+  overallQuality: 'good' | 'fair' | 'poor';
+}
+
+/**
+ * Git diff analysis types
+ */
+export interface GitFileChange {
+  path: string;
+  type: 'added' | 'modified' | 'deleted';
+  linesAdded: number;
+  linesDeleted: number;
+}
+
+export interface DiffAnalysis {
+  baseBranch: string;
+  changedFiles: GitFileChange[];
+  impactedAreas: string[];
+  riskLevel: 'high' | 'medium' | 'low';
+  suggestedTestFocus: string[];
+}
+
 
 // Made with Bob

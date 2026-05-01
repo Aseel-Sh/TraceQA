@@ -28,7 +28,8 @@ import {
   TokenUsage,
   TraceQAError,
   ErrorCategory,
-  TestType
+  TestType,
+  DiffAnalysis
 } from '../types/index.js';
 import { MCPClientManager } from '../mcp/index.js';
 import { logger } from '../utils/logger.js';
@@ -82,13 +83,13 @@ export class TestAgent {
   /**
    * Create a comprehensive test plan based on context
    */
-  async createTestPlan(context: TestContext): Promise<TestPlan> {
+  async createTestPlan(context: TestContext, diffAnalysis?: DiffAnalysis | null): Promise<TestPlan> {
     this.updatePhase('planning');
     logger.info('Creating test plan...');
 
     try {
-      // Generate test planning prompt
-      const prompt = getTestPlanningPrompt(context);
+      // Generate test planning prompt with optional diff analysis
+      const prompt = getTestPlanningPrompt(context, diffAnalysis);
 
       // Get response from Watsonx
       const response = await this.watsonxClient.sendMessage(prompt);
@@ -312,15 +313,14 @@ export class TestAgent {
 
     logger.debug(`Executing ${testCase.steps.length} steps for ${testCase.name}`);
 
-    // Simulate execution
-    for (const step of testCase.steps) {
-      logger.debug(`Step: ${step.description}`);
-      // In real implementation: execute step using MCP
-      await this.sleep(100); // Simulate step execution
-    }
-
-    // Simulate success/failure (80% success rate for demo)
-    return Math.random() > 0.2;
+    // Note: Actual test execution is now handled by TestCoordinator
+    // which delegates to APITester or WebTester based on test type.
+    // This method is kept for backward compatibility but should not be used directly.
+    
+    logger.warn('executeTestCase called directly - tests should be executed via TestCoordinator');
+    
+    // Return false to indicate this path should not be used
+    return false;
   }
 
   /**
@@ -493,7 +493,7 @@ Duration: ${results.duration}ms
   }
 
   /**
-   * Update token usage from Claude client
+   * Update token usage from watsonx client
    */
   private updateTokenUsage(): void {
     this.state.tokenUsage = this.watsonxClient.getTokenUsage();

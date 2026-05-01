@@ -32,8 +32,8 @@ export type {
   AgentAnalysis,
   ConversationMessage,
   TokenUsage,
-  ClaudeResponse,
-  ClaudeStreamChunk,
+  WatsonxResponse,
+  WatsonxStreamChunk,
   TestPlanningRequest,
   TestExecutionRequest,
   ReportOptions
@@ -75,7 +75,7 @@ export async function initializeAgent(options: AgentInitOptions): Promise<TestAg
 
   const config: AgentConfig = {
     apiKey: options.apiKey,
-    model: options.model || 'claude-3-5-sonnet-20241022',
+    model: options.model || 'ibm/granite-13b-chat-v2',
     systemPrompt: options.systemPrompt || SYSTEM_PROMPT,
     maxTokens: options.maxTokens || 4096,
     temperature: options.temperature || 0.7,

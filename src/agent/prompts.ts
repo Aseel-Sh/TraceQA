@@ -3,7 +3,7 @@
  * System prompts, test planning prompts, and other templates for the AI agent
  */
 
-import { TestContext, TestType } from '../types/index.js';
+import { TestContext, DiffAnalysis } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -38,10 +38,10 @@ Guidelines:
 /**
  * Test planning prompt template
  */
-export function getTestPlanningPrompt(context: TestContext): string {
+export function getTestPlanningPrompt(context: TestContext, diffAnalysis?: DiffAnalysis | null): string {
   const { repository, changes, description, acceptanceCriteria, buildInfo } = context;
 
-  return `# Test Planning Request
+  let prompt = `# Test Planning Request
 
 ## Repository Information
 - Name: ${repository.name}
@@ -52,7 +52,7 @@ export function getTestPlanningPrompt(context: TestContext): string {
 ${description}
 
 ## Acceptance Criteria
-${acceptanceCriteria && acceptanceCriteria.length > 0 
+${acceptanceCriteria && acceptanceCriteria.length > 0
   ? acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join('\n')
   : 'No specific acceptance criteria provided'}
 
@@ -62,7 +62,31 @@ ${acceptanceCriteria && acceptanceCriteria.length > 0
 - Lines deleted: ${changes.deletions}
 
 ### Changed Files:
-${changes.files.map(f => `- ${f.path} (${f.type}): +${f.additions} -${f.deletions}`).join('\n')}
+${changes.files.map(f => `- ${f.path} (${f.type}): +${f.additions} -${f.deletions}`).join('\n')}`;
+
+  // Add diff analysis if available
+  if (diffAnalysis) {
+    prompt += `
+
+## Git Diff Analysis
+- Base branch: ${diffAnalysis.baseBranch}
+- Changed files: ${diffAnalysis.changedFiles.length}
+- Risk level: ${diffAnalysis.riskLevel.toUpperCase()}
+
+### Impacted Areas:
+${diffAnalysis.impactedAreas.length > 0
+  ? diffAnalysis.impactedAreas.map(area => `- ${area}`).join('\n')
+  : '- No specific areas identified'}
+
+### Suggested Test Focus:
+${diffAnalysis.suggestedTestFocus.length > 0
+  ? diffAnalysis.suggestedTestFocus.map(focus => `- ${focus}`).join('\n')
+  : '- General functionality testing'}
+
+**IMPORTANT**: Prioritize tests for the impacted areas and suggested focus areas above.`;
+  }
+
+  prompt += `
 
 ## Build Information
 - Framework: ${buildInfo.framework}
@@ -75,7 +99,7 @@ Create a comprehensive test plan that:
 1. Covers all acceptance criteria
 2. Tests the changed functionality thoroughly
 3. Includes edge cases and error scenarios
-4. Prioritizes critical user flows
+4. Prioritizes critical user flows${diffAnalysis ? ' and impacted areas from diff analysis' : ''}
 5. Is executable using browser automation and/or API testing
 
 Respond with a JSON object in this exact format:
@@ -102,6 +126,8 @@ Respond with a JSON object in this exact format:
   "requiredResources": ["browser", "api-client"],
   "reasoning": "Why these tests cover the requirements"
 }`;
+
+  return prompt;
 }
 
 /**
@@ -466,7 +492,7 @@ Respond with a JSON object:
 }
 
 /**
- * Parse JSON response from Claude
+ * Parse JSON response from AI model
  */
 export function parseJSONResponse<T>(response: string): T | null {
   try {

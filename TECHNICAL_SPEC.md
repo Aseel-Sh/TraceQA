@@ -63,7 +63,7 @@ TraceQA bridges the gap between code implementation and quality assurance by pro
   "language": "TypeScript 5.x",
   "cli-framework": "@clack/prompts",
   "agent-framework": "LangChain.js or custom",
-  "llm-integration": "Anthropic Claude API",
+  "llm-integration": "IBM watsonx.ai",
   "mcp-client": "@modelcontextprotocol/sdk",
   "browser-automation": "Playwright (via MCP)",
   "api-testing": "axios + custom test runner",

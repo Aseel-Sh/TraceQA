@@ -26,7 +26,10 @@ import {
   RepositoryInfo,
   TraceQAError,
   ErrorCategory,
-  TestExecutionOptions
+  TestExecutionOptions,
+  HTTPMethod,
+  AssertionType,
+  DiffAnalysis
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -60,9 +63,9 @@ export class TestCoordinator {
         autoStart: config.buildSystem?.autoStart ?? true,
         port: config.buildSystem?.port
       },
-      agent: config.agent || {},
-      mcp: config.mcp || {},
-      execution: config.execution || {},
+      agent: config.agent ?? {} as any,
+      mcp: config.mcp ?? {},
+      execution: config.execution ?? {},
       cleanup: {
         stopServer: config.cleanup?.stopServer ?? true,
         cleanupMCP: config.cleanup?.cleanupMCP ?? true,
@@ -84,7 +87,7 @@ export class TestCoordinator {
   /**
    * Run complete test workflow
    */
-  async runTests(testConfig: TestConfig): Promise<{
+  async runTests(testConfig: TestConfig, diffAnalysis?: DiffAnalysis | null): Promise<{
     testPlan: TestPlan;
     results: TestResults;
     analysis: AgentAnalysis;
@@ -107,7 +110,7 @@ export class TestCoordinator {
 
       // Phase 4: Plan tests
       this.updatePhase('planning');
-      const testPlan = await this.agent.createTestPlan(context);
+      const testPlan = await this.agent.createTestPlan(context, diffAnalysis);
       this.state.testPlan = testPlan;
 
       // Phase 5: Execute tests
@@ -430,28 +433,97 @@ export class TestCoordinator {
     context: TestContext
   ): Promise<TestResult> {
     if (!this.apiTester) {
-      throw new TraceQAError('API tester not initialized', ErrorCategory.TEST_EXECUTION);
+      return {
+        testCaseId: testCase.id,
+        testCaseName: testCase.name,
+        passed: false,
+        duration: 0,
+        message: 'API tester not initialized - skipped',
+        error: 'API tester not configured or initialized',
+        timestamp: new Date().toISOString()
+      };
     }
 
-    // Convert test case to API test config (simplified)
-    // In real implementation, would parse test steps into API requests
     const startTime = Date.now();
-
-    // Simulate API test execution
     logger.debug(`Executing API test: ${testCase.name}`);
 
-    // This is a placeholder - real implementation would convert test steps to API calls
-    const passed = Math.random() > 0.2; // 80% success rate for demo
-    const duration = Date.now() - startTime;
+    try {
+      // Convert test case steps to API test config
+      if (testCase.steps.length === 0) {
+        return {
+          testCaseId: testCase.id,
+          testCaseName: testCase.name,
+          passed: false,
+          duration: Date.now() - startTime,
+          message: 'No test steps defined',
+          error: 'Test case has no steps to execute',
+          timestamp: new Date().toISOString()
+        };
+      }
 
-    return {
-      testCaseId: testCase.id,
-      testCaseName: testCase.name,
-      passed,
-      duration,
-      message: passed ? 'API test passed' : 'API test failed',
-      timestamp: new Date().toISOString()
-    };
+      // Extract API endpoint from test steps or build info
+      const firstStep = testCase.steps[0];
+      const apiUrl = firstStep.target || (context.buildInfo.port
+        ? `http://localhost:${context.buildInfo.port}/api/test`
+        : undefined);
+
+      if (!apiUrl) {
+        return {
+          testCaseId: testCase.id,
+          testCaseName: testCase.name,
+          passed: false,
+          duration: Date.now() - startTime,
+          message: 'Cannot determine API endpoint',
+          error: 'No API endpoint specified in test steps or build info',
+          timestamp: new Date().toISOString()
+        };
+      }
+
+      // Execute the API test
+      const apiTestResult = await this.apiTester.executeTest({
+        name: testCase.name,
+        request: {
+          method: HTTPMethod.GET,
+          url: apiUrl,
+          headers: {},
+          timeout: 30000
+        },
+        assertions: [
+          {
+            type: AssertionType.STATUS_CODE,
+            expected: 200,
+            operator: 'equals'
+          }
+        ]
+      });
+
+      const duration = Date.now() - startTime;
+
+      return {
+        testCaseId: testCase.id,
+        testCaseName: testCase.name,
+        passed: apiTestResult.passed,
+        duration,
+        message: apiTestResult.passed
+          ? 'API test passed'
+          : `API test failed: ${apiTestResult.error || 'Assertions failed'}`,
+        error: apiTestResult.error,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error(`API test execution error: ${testCase.name}`, error);
+
+      return {
+        testCaseId: testCase.id,
+        testCaseName: testCase.name,
+        passed: false,
+        duration,
+        message: 'API test execution failed',
+        error: error instanceof Error ? error.message : String(error),
+        timestamp: new Date().toISOString()
+      };
+    }
   }
 
   /**
@@ -461,28 +533,85 @@ export class TestCoordinator {
     testCase: TestCase,
     context: TestContext
   ): Promise<TestResult> {
-    if (!this.webTester) {
-      throw new TraceQAError('Web tester not initialized', ErrorCategory.TEST_EXECUTION);
-    }
-
-    // Convert test case to web test config (simplified)
-    // In real implementation, would parse test steps into web actions
     const startTime = Date.now();
-
     logger.debug(`Executing web test: ${testCase.name}`);
 
-    // This is a placeholder - real implementation would convert test steps to web actions
-    const passed = Math.random() > 0.2; // 80% success rate for demo
-    const duration = Date.now() - startTime;
+    // Check if web tester is available
+    if (!this.webTester) {
+      return {
+        testCaseId: testCase.id,
+        testCaseName: testCase.name,
+        passed: false,
+        duration: Date.now() - startTime,
+        message: 'Browser MCP not configured - skipped',
+        error: 'Web tester not initialized. Browser MCP server is required for web tests.',
+        timestamp: new Date().toISOString()
+      };
+    }
 
-    return {
-      testCaseId: testCase.id,
-      testCaseName: testCase.name,
-      passed,
-      duration,
-      message: passed ? 'Web test passed' : 'Web test failed',
-      timestamp: new Date().toISOString()
-    };
+    try {
+      // Convert test case to web test config
+      if (testCase.steps.length === 0) {
+        return {
+          testCaseId: testCase.id,
+          testCaseName: testCase.name,
+          passed: false,
+          duration: Date.now() - startTime,
+          message: 'No test steps defined',
+          error: 'Test case has no steps to execute',
+          timestamp: new Date().toISOString()
+        };
+      }
+
+      // Get the base URL from build info
+      const baseUrl = context.buildInfo.port
+        ? `http://localhost:${context.buildInfo.port}`
+        : 'http://localhost:3000'; // Default fallback
+
+      // Convert test steps to web test steps
+      const webSteps = testCase.steps.map(step => ({
+        action: step.action as any,
+        selector: step.target,
+        value: step.value,
+        description: step.description
+      }));
+
+      // Execute the web test
+      const webTestResult = await this.webTester.executeTest({
+        name: testCase.name,
+        url: baseUrl,
+        steps: webSteps,
+        timeout: 30000
+      });
+
+      const duration = Date.now() - startTime;
+
+      return {
+        testCaseId: testCase.id,
+        testCaseName: testCase.name,
+        passed: webTestResult.passed,
+        duration,
+        message: webTestResult.passed
+          ? 'Web test passed'
+          : `Web test failed: ${webTestResult.error || 'Test steps failed'}`,
+        error: webTestResult.error,
+        screenshots: webTestResult.screenshots,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error(`Web test execution error: ${testCase.name}`, error);
+
+      return {
+        testCaseId: testCase.id,
+        testCaseName: testCase.name,
+        passed: false,
+        duration,
+        message: 'Web test execution failed',
+        error: error instanceof Error ? error.message : String(error),
+        timestamp: new Date().toISOString()
+      };
+    }
   }
 
   /**
@@ -494,21 +623,90 @@ export class TestCoordinator {
   ): Promise<TestResult> {
     logger.debug(`Executing integration test: ${testCase.name}`);
 
-    // Integration tests may involve both API and UI testing
     const startTime = Date.now();
 
-    // This is a placeholder - real implementation would orchestrate both API and UI tests
-    const passed = Math.random() > 0.2; // 80% success rate for demo
-    const duration = Date.now() - startTime;
+    try {
+      // Integration tests orchestrate both API and Web tests
+      // Split test steps into API and Web components
+      const apiSteps = testCase.steps.filter(step =>
+        step.action.toLowerCase().includes('api') ||
+        step.action.toLowerCase().includes('request')
+      );
+      const webSteps = testCase.steps.filter(step =>
+        !apiSteps.includes(step)
+      );
 
-    return {
-      testCaseId: testCase.id,
-      testCaseName: testCase.name,
-      passed,
-      duration,
-      message: passed ? 'Integration test passed' : 'Integration test failed',
-      timestamp: new Date().toISOString()
-    };
+      const results: TestResult[] = [];
+
+      // Execute API portion if there are API steps
+      if (apiSteps.length > 0 && this.apiTester) {
+        const apiTestCase: TestCase = {
+          ...testCase,
+          id: `${testCase.id}-api`,
+          name: `${testCase.name} (API)`,
+          steps: apiSteps
+        };
+        const apiResult = await this.executeAPITest(apiTestCase, context);
+        results.push(apiResult);
+      }
+
+      // Execute Web portion if there are web steps
+      if (webSteps.length > 0 && this.webTester) {
+        const webTestCase: TestCase = {
+          ...testCase,
+          id: `${testCase.id}-web`,
+          name: `${testCase.name} (Web)`,
+          steps: webSteps
+        };
+        const webResult = await this.executeWebTest(webTestCase, context);
+        results.push(webResult);
+      }
+
+      // If no steps could be executed
+      if (results.length === 0) {
+        return {
+          testCaseId: testCase.id,
+          testCaseName: testCase.name,
+          passed: false,
+          duration: Date.now() - startTime,
+          message: 'Integration test could not be executed',
+          error: 'No API or Web testers available, or no valid test steps',
+          timestamp: new Date().toISOString()
+        };
+      }
+
+      // Combine results
+      const allPassed = results.every(r => r.passed);
+      const duration = Date.now() - startTime;
+      const failedResults = results.filter(r => !r.passed);
+
+      return {
+        testCaseId: testCase.id,
+        testCaseName: testCase.name,
+        passed: allPassed,
+        duration,
+        message: allPassed
+          ? 'Integration test passed'
+          : `Integration test failed: ${failedResults.map(r => r.message).join('; ')}`,
+        error: failedResults.length > 0
+          ? failedResults.map(r => r.error).filter(Boolean).join('; ')
+          : undefined,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error(`Integration test execution error: ${testCase.name}`, error);
+
+      return {
+        testCaseId: testCase.id,
+        testCaseName: testCase.name,
+        passed: false,
+        duration,
+        message: 'Integration test execution failed',
+        error: error instanceof Error ? error.message : String(error),
+        timestamp: new Date().toISOString()
+      };
+    }
   }
 
   /**

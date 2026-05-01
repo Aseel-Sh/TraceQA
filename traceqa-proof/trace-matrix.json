@@ -1,0 +1,43 @@
+{
+  "acceptanceCriteria": [
+    {
+      "id": "AC1",
+      "description": "User can register with email and password",
+      "testCases": [
+        "TC1",
+        "TC2"
+      ]
+    },
+    {
+      "id": "AC2",
+      "description": "Password must be at least 8 characters with uppercase, lowercase, and number",
+      "testCases": [
+        "TC3",
+        "TC4"
+      ]
+    },
+    {
+      "id": "AC3",
+      "description": "User receives confirmation email after registration",
+      "testCases": [
+        "TC5",
+        "TC6"
+      ]
+    },
+    {
+      "id": "AC4",
+      "description": "User can login with valid credentials",
+      "testCases": [
+        "TC7",
+        "TC8"
+      ]
+    },
+    {
+      "id": "AC5",
+      "description": "User cannot login with invalid credentials",
+      "testCases": [
+        "TC9"
+      ]
+    }
+  ]
+}

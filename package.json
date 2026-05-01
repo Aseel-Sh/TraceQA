@@ -12,7 +12,10 @@
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "demo": "tsx src/demo/demo-runner.ts",
+    "demo:mock": "tsx src/demo/demo-runner.ts --mock",
+    "smoke:ibm": "tsx src/smoke-tests/ibm-smoke-test.ts"
   },
   "keywords": [
     "qa",

@@ -1,0 +1,151 @@
+{
+  "timestamp": "2026-05-01T20:28:05.089Z",
+  "summary": {
+    "total": 9,
+    "passed": 8,
+    "failed": 1,
+    "passRate": "88.9"
+  },
+  "acceptanceCriteria": [
+    "User can register with email and password",
+    "Password must be at least 8 characters with uppercase, lowercase, and number",
+    "User receives confirmation email after registration",
+    "User can login with valid credentials",
+    "User cannot login with invalid credentials"
+  ],
+  "testResults": [
+    {
+      "id": "TC1",
+      "title": "Register with valid email and password",
+      "description": "Verify user can successfully register with valid credentials",
+      "steps": [
+        "Navigate to registration page",
+        "Enter valid email address",
+        "Enter valid password",
+        "Click Register button"
+      ],
+      "expectedResult": "User is registered successfully and redirected to dashboard",
+      "passed": true,
+      "duration": 165,
+      "evidence": "✅ All steps executed successfully\nUser is registered successfully and redirected to dashboard"
+    },
+    {
+      "id": "TC2",
+      "title": "Register with invalid email format",
+      "description": "Verify system rejects invalid email format",
+      "steps": [
+        "Navigate to registration page",
+        "Enter invalid email (e.g., \"notanemail\")",
+        "Enter valid password",
+        "Click Register button"
+      ],
+      "expectedResult": "Error message displayed: \"Invalid email format\"",
+      "passed": true,
+      "duration": 403,
+      "evidence": "✅ All steps executed successfully\nError message displayed: \"Invalid email format\""
+    },
+    {
+      "id": "TC3",
+      "title": "Register with weak password",
+      "description": "Verify password validation enforces complexity requirements",
+      "steps": [
+        "Navigate to registration page",
+        "Enter valid email address",
+        "Enter weak password (e.g., \"pass123\")",
+        "Click Register button"
+      ],
+      "expectedResult": "Error message displayed: \"Password must be at least 8 characters with uppercase, lowercase, and number\"",
+      "passed": false,
+      "duration": 449,
+      "evidence": "❌ Test failed at step 3\nExpected: Error message displayed: \"Password must be at least 8 characters with uppercase, lowercase, and number\"\nActual: Password \"pass123\" accepted (validation not working)"
+    },
+    {
+      "id": "TC4",
+      "title": "Password validation with strong password",
+      "description": "Verify strong password is accepted",
+      "steps": [
+        "Navigate to registration page",
+        "Enter valid email address",
+        "Enter strong password (e.g., \"SecurePass123\")",
+        "Click Register button"
+      ],
+      "expectedResult": "Password accepted and user registered",
+      "passed": true,
+      "duration": 463,
+      "evidence": "✅ All steps executed successfully\nPassword accepted and user registered"
+    },
+    {
+      "id": "TC5",
+      "title": "Email confirmation sent after registration",
+      "description": "Verify confirmation email is sent to user",
+      "steps": [
+        "Complete registration with valid credentials",
+        "Check email inbox"
+      ],
+      "expectedResult": "Confirmation email received with activation link",
+      "passed": true,
+      "duration": 335,
+      "evidence": "✅ All steps executed successfully\nConfirmation email received with activation link"
+    },
+    {
+      "id": "TC6",
+      "title": "Login with valid credentials",
+      "description": "Verify user can login with correct username and password",
+      "steps": [
+        "Navigate to login page",
+        "Enter registered email",
+        "Enter correct password",
+        "Click Login button"
+      ],
+      "expectedResult": "User is logged in and redirected to dashboard",
+      "passed": true,
+      "duration": 114,
+      "evidence": "✅ All steps executed successfully\nUser is logged in and redirected to dashboard"
+    },
+    {
+      "id": "TC7",
+      "title": "Login with valid credentials",
+      "description": "Verify user can login with correct username and password",
+      "steps": [
+        "Navigate to login page",
+        "Enter registered email",
+        "Enter correct password",
+        "Click Login button"
+      ],
+      "expectedResult": "User is logged in and redirected to dashboard",
+      "passed": true,
+      "duration": 274,
+      "evidence": "✅ All steps executed successfully\nUser is logged in and redirected to dashboard"
+    },
+    {
+      "id": "TC8",
+      "title": "Login with invalid password",
+      "description": "Verify system rejects incorrect password",
+      "steps": [
+        "Navigate to login page",
+        "Enter registered email",
+        "Enter incorrect password",
+        "Click Login button"
+      ],
+      "expectedResult": "Error message displayed: \"Invalid credentials\"",
+      "passed": true,
+      "duration": 494,
+      "evidence": "✅ All steps executed successfully\nError message displayed: \"Invalid credentials\""
+    },
+    {
+      "id": "TC9",
+      "title": "Login with non-existent user",
+      "description": "Verify system rejects non-existent user",
+      "steps": [
+        "Navigate to login page",
+        "Enter non-registered email",
+        "Enter any password",
+        "Click Login button"
+      ],
+      "expectedResult": "Error message displayed: \"User not found\"",
+      "passed": true,
+      "duration": 484,
+      "evidence": "✅ All steps executed successfully\nError message displayed: \"User not found\""
+    }
+  ]
+}

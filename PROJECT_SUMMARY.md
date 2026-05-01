@@ -9,13 +9,13 @@
 
 ## Executive Summary
 
-TraceQA is an intelligent CLI tool that revolutionizes developer-driven QA testing by leveraging AI and automation. Built with TypeScript and powered by Claude AI, TraceQA enables developers to perform comprehensive testing of code changes before merging, providing fast, actionable feedback directly in their workflow.
+TraceQA is an intelligent CLI tool that revolutionizes developer-driven QA testing by leveraging AI and automation. Built with TypeScript and powered by IBM watsonx.ai, TraceQA enables developers to perform comprehensive testing of code changes before merging, providing fast, actionable feedback directly in their workflow.
 
 The core implementation is complete with all major systems operational:
 - ✅ Interactive CLI with beautiful prompts
 - ✅ Intelligent build system with auto-detection
 - ✅ MCP integration for browser and API testing
-- ✅ AI-powered test agent with Claude integration
+- ✅ AI-powered test agent with IBM watsonx.ai integration
 - ✅ Comprehensive testing framework
 - ✅ Test coordination and execution system
 

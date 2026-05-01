@@ -6,9 +6,16 @@
 import { Command } from 'commander';
 import { collectUserInput, displayOutro, showError } from './prompts.js';
 import { logger } from '../utils/logger.js';
-import { TestConfig, TestType, TraceQAError, ErrorCategory } from '../types/index.js';
+import { TestConfig, TestType, TraceQAError, ErrorCategory, DiffAnalysis } from '../types/index.js';
 import path from 'path';
 import fs from 'fs-extra';
+import { BuildSystem } from '../core/build-system.js';
+import { TestAgent } from '../agent/test-agent.js';
+import { MCPClientManager } from '../mcp/index.js';
+import { TestCoordinator } from '../testing/test-coordinator.js';
+import { ReportGenerator } from '../reporting/index.js';
+import { AmbiguityDetector, GitAnalyzer } from '../analysis/index.js';
+import { DemoRunner } from '../demo/demo-runner.js';
 
 // Package version - will be replaced during build
 const VERSION = '0.1.0';
@@ -34,6 +41,9 @@ export function createCLI(): Command {
     .option('-d, --description <text>', 'Change description')
     .option('-t, --type <type>', 'Test type: ui, api, or both', 'both')
     .option('-y, --yes', 'Auto-approve test plan without confirmation')
+    .option('-o, --output-dir <path>', 'Output directory for reports', 'traceqa-proof')
+    .option('--skip-ambiguity-check', 'Skip ambiguity analysis of acceptance criteria')
+    .option('--base-branch <name>', 'Base branch for git diff comparison', 'main')
     .option('--debug', 'Enable debug mode')
     .action(async (options) => {
       try {
@@ -50,7 +60,7 @@ export function createCLI(): Command {
     .description('Configure TraceQA settings')
     .option('-s, --show', 'Show current configuration')
     .option('-e, --edit', 'Edit configuration file')
-    .option('--api-key <key>', 'Set Anthropic API key')
+    .option('--api-key <key>', 'Set IBM watsonx API key')
     .action(async (options) => {
       try {
         await handleConfigCommand(options);
@@ -68,6 +78,21 @@ export function createCLI(): Command {
     .action(async (options) => {
       try {
         await handleInitCommand(options);
+      } catch (error) {
+        handleError(error);
+        process.exit(1);
+      }
+    });
+
+  // Demo command
+  program
+    .command('demo')
+    .description('Run TraceQA demo with sample acceptance criteria')
+    .option('--mock', 'Force mock mode even if IBM credentials are present')
+    .option('-o, --output-dir <path>', 'Output directory for reports', './traceqa-proof')
+    .action(async (options) => {
+      try {
+        await handleDemoCommand(options);
       } catch (error) {
         handleError(error);
         process.exit(1);
@@ -99,6 +124,9 @@ async function handleTestCommand(options: {
   description?: string;
   type?: string;
   yes?: boolean;
+  outputDir?: string;
+  skipAmbiguityCheck?: boolean;
+  baseBranch?: string;
   debug?: boolean;
 }): Promise<void> {
   // Enable debug mode if requested
@@ -133,7 +161,8 @@ async function handleTestCommand(options: {
       },
       testType,
       description: options.description,
-      autoApprove: options.yes || false
+      autoApprove: options.yes || false,
+      outputDir: options.outputDir
     };
 
     logger.info('Starting tests with provided configuration...');
@@ -154,15 +183,128 @@ async function handleTestCommand(options: {
       },
       testType: userInput.testType,
       description: userInput.description,
-      acceptanceCriteria: userInput.acceptanceCriteria 
+      acceptanceCriteria: userInput.acceptanceCriteria
         ? userInput.acceptanceCriteria.split(',').map(c => c.trim())
         : undefined,
-      autoApprove: options.yes || false
+      autoApprove: options.yes || false,
+      outputDir: options.outputDir
     };
   }
 
+  // Run ambiguity analysis if acceptance criteria provided
+  let diffAnalysis: DiffAnalysis | null = null;
+  
+  if (config.acceptanceCriteria && config.acceptanceCriteria.length > 0 && !options.skipAmbiguityCheck) {
+    logger.newLine();
+    logger.section('Analyzing Acceptance Criteria');
+    
+    const ambiguityDetector = new AmbiguityDetector();
+    const analysis = ambiguityDetector.analyzeAcceptanceCriteria(config.acceptanceCriteria);
+    
+    if (analysis.issuesFound > 0) {
+      logger.warn(`Found ${analysis.issuesFound} ambiguity issue(s) in acceptance criteria`);
+      logger.newLine();
+      
+      // Display issues by severity
+      const highSeverity = analysis.issues.filter(i => i.severity === 'high');
+      const mediumSeverity = analysis.issues.filter(i => i.severity === 'medium');
+      const lowSeverity = analysis.issues.filter(i => i.severity === 'low');
+      
+      if (highSeverity.length > 0) {
+        logger.subsection('⚠️  High Severity Issues');
+        for (const issue of highSeverity) {
+          logger.error(`"${issue.criterion}"`);
+          logger.info(`  Vague terms: ${issue.vagueTerms.join(', ')}`);
+          logger.info(`  Suggestion: ${issue.suggestion}`);
+          logger.newLine();
+        }
+      }
+      
+      if (mediumSeverity.length > 0) {
+        logger.subsection('⚠️  Medium Severity Issues');
+        for (const issue of mediumSeverity) {
+          logger.warn(`"${issue.criterion}"`);
+          logger.info(`  Vague terms: ${issue.vagueTerms.join(', ')}`);
+          logger.info(`  Suggestion: ${issue.suggestion}`);
+          logger.newLine();
+        }
+      }
+      
+      if (lowSeverity.length > 0) {
+        logger.subsection('ℹ️  Low Severity Issues');
+        for (const issue of lowSeverity) {
+          logger.info(`"${issue.criterion}"`);
+          logger.info(`  Issue: ${issue.issue}`);
+          logger.info(`  Suggestion: ${issue.suggestion}`);
+          logger.newLine();
+        }
+      }
+      
+      logger.keyValue('Overall Quality', analysis.overallQuality.toUpperCase());
+      
+      if (analysis.overallQuality === 'poor' && !config.autoApprove) {
+        logger.newLine();
+        logger.warn('Acceptance criteria quality is poor. Consider refining them before proceeding.');
+        logger.info('You can skip this check with --skip-ambiguity-check flag');
+        
+        // In interactive mode, we could ask for confirmation here
+        // For now, we'll just warn and continue
+      }
+    } else {
+      logger.success('✓ No ambiguity issues found in acceptance criteria');
+    }
+  }
+  
+  // Run git diff analysis
+  logger.newLine();
+  logger.section('Analyzing Git Changes');
+  
+  const gitAnalyzer = new GitAnalyzer();
+  diffAnalysis = await gitAnalyzer.analyzeDiff(options.baseBranch || 'main');
+  
+  if (diffAnalysis) {
+    logger.success('✓ Git diff analysis complete');
+    logger.newLine();
+    
+    logger.keyValue('Base branch', diffAnalysis.baseBranch);
+    logger.keyValue('Changed files', diffAnalysis.changedFiles.length.toString());
+    logger.keyValue('Risk level', diffAnalysis.riskLevel.toUpperCase());
+    
+    if (diffAnalysis.impactedAreas.length > 0) {
+      logger.newLine();
+      logger.subsection('Impacted Areas');
+      diffAnalysis.impactedAreas.forEach(area => {
+        logger.listItem(area);
+      });
+    }
+    
+    if (diffAnalysis.suggestedTestFocus.length > 0) {
+      logger.newLine();
+      logger.subsection('Suggested Test Focus');
+      diffAnalysis.suggestedTestFocus.forEach(focus => {
+        logger.listItem(focus);
+      });
+    }
+    
+    // Show file changes summary
+    if (diffAnalysis.changedFiles.length > 0) {
+      logger.newLine();
+      logger.subsection('Changed Files Summary');
+      
+      const added = diffAnalysis.changedFiles.filter(f => f.type === 'added').length;
+      const modified = diffAnalysis.changedFiles.filter(f => f.type === 'modified').length;
+      const deleted = diffAnalysis.changedFiles.filter(f => f.type === 'deleted').length;
+      
+      if (added > 0) logger.keyValue('Added', added.toString());
+      if (modified > 0) logger.keyValue('Modified', modified.toString());
+      if (deleted > 0) logger.keyValue('Deleted', deleted.toString());
+    }
+  } else {
+    logger.info('Git diff analysis skipped (not in a git repository or no changes detected)');
+  }
+
   // Execute tests with the configuration
-  await executeTests(config);
+  await executeTests(config, diffAnalysis);
 }
 
 /**
@@ -194,7 +336,7 @@ function parseTestType(type: string): TestType {
 /**
  * Execute tests with the given configuration
  */
-async function executeTests(config: TestConfig): Promise<void> {
+async function executeTests(config: TestConfig, diffAnalysis: DiffAnalysis | null = null): Promise<void> {
   logger.section('Test Execution');
   
   logger.info('Configuration loaded');
@@ -212,9 +354,104 @@ async function executeTests(config: TestConfig): Promise<void> {
 
   logger.newLine();
 
-  // TODO: Implement actual test execution
-  // This is a placeholder that will be implemented in future phases
-  logger.warn('Test execution not yet implemented');
+  // Initialize components
+  logger.info('Initializing test components...');
+  
+  // Get API key from environment
+  const apiKey = process.env.IBM_WATSONX_API_KEY;
+  if (!apiKey) {
+    throw new TraceQAError(
+      'IBM_WATSONX_API_KEY environment variable not set',
+      ErrorCategory.CONFIGURATION
+    );
+  }
+  
+  const buildSystem = new BuildSystem(config.repository.path);
+  const agent = new TestAgent({ apiKey });
+  const mcpManager = new MCPClientManager();
+  
+  const coordinator = new TestCoordinator(buildSystem, agent, mcpManager, {
+    buildSystem: {
+      autoInstall: true,
+      autoStart: config.testType === TestType.WEB_UI || config.testType === TestType.BOTH
+    }
+  });
+
+  try {
+    // Run tests with diff analysis
+    const { results, report } = await coordinator.runTests(config, diffAnalysis);
+    
+    // Display results
+    logger.newLine();
+    logger.section('Test Results');
+    
+    logger.keyValue('Total Tests', results.summary.total.toString());
+    logger.keyValue('Passed', results.summary.passed.toString());
+    logger.keyValue('Failed', results.summary.failed.toString());
+    logger.keyValue('Skipped', results.summary.skipped.toString());
+    
+    if (results.summary.passed === results.summary.total) {
+      logger.success('All tests passed! ✓');
+    } else if (results.summary.failed > 0) {
+      logger.error(`${results.summary.failed} test(s) failed`);
+    } else if (results.summary.skipped > 0) {
+      logger.warn(`${results.summary.skipped} test(s) were skipped`);
+    }
+    
+    // Display individual test results
+    logger.newLine();
+    logger.subsection('Test Details');
+    
+    for (const result of results.results) {
+      const status = result.passed ? '✓' : '✗';
+      
+      logger.info(`${status} ${result.testCaseName} (${result.duration}ms)`);
+      
+      if (result.message) {
+        logger.debug(`  ${result.message}`);
+      }
+      
+      if (result.error) {
+        logger.error(`  Error: ${result.error}`);
+      }
+    }
+    
+    // Display report
+    if (report) {
+      logger.newLine();
+      logger.section('Analysis');
+      logger.info(report);
+    }
+    
+    // Generate comprehensive reports
+    logger.newLine();
+    logger.section('Generating Reports');
+    
+    try {
+      const reportGenerator = new ReportGenerator();
+      const acceptanceCriteria = config.acceptanceCriteria || [];
+      const outputDir = config.outputDir || 'traceqa-proof';
+      
+      await reportGenerator.generateReport(results, acceptanceCriteria, outputDir);
+      
+      logger.newLine();
+      logger.success('✓ Reports generated successfully');
+      logger.info(`  Location: ${path.resolve(outputDir)}/`);
+      
+    } catch (reportError) {
+      logger.error('Failed to generate reports', reportError);
+      // Don't fail the entire test run if report generation fails
+    }
+    
+    // Exit with appropriate code
+    if (results.summary.failed > 0) {
+      process.exit(1);
+    }
+    
+  } catch (error) {
+    logger.error('Test execution failed', error);
+    throw error;
+  }
   logger.info('This is Phase 1 - CLI framework only');
   logger.info('Test execution will be implemented in Phase 2-4');
   
@@ -265,7 +502,7 @@ async function handleConfigCommand(options: {
       config = await fs.readJSON(configPath);
     }
     
-    config.anthropicApiKey = options.apiKey;
+    config.ibmWatsonxApiKey = options.apiKey;
     await fs.ensureDir(path.dirname(configPath));
     await fs.writeJSON(configPath, config, { spaces: 2 });
     
@@ -287,7 +524,7 @@ async function handleConfigCommand(options: {
   logger.info('Configuration options:');
   logger.listItem('--show: Display current configuration');
   logger.listItem('--edit: Edit configuration file');
-  logger.listItem('--api-key <key>: Set Anthropic API key');
+  logger.listItem('--api-key <key>: Set IBM watsonx API key');
 }
 
 /**
@@ -322,7 +559,7 @@ async function handleInitCommand(options: { force?: boolean }): Promise<void> {
   logger.info(`Configuration created: ${configPath}`);
   logger.newLine();
   logger.info('Next steps:');
-  logger.listItem('Set your Anthropic API key: traceqa config --api-key YOUR_KEY');
+  logger.listItem('Set your IBM watsonx API key: traceqa config --api-key YOUR_KEY');
   logger.listItem('Run your first test: traceqa test');
 }
 
@@ -349,14 +586,14 @@ async function handleInfoCommand(): Promise<void> {
   
   if (configExists) {
     const config = await fs.readJSON(configPath);
-    logger.keyValue('API Key', config.anthropicApiKey ? '✓ Set' : '✗ Not set');
+    logger.keyValue('API Key', config.ibmWatsonxApiKey ? '✓ Set' : '✗ Not set');
   }
 
   logger.newLine();
   logger.subsection('Environment');
   
   const envVars = [
-    'ANTHROPIC_API_KEY',
+    'IBM_WATSONX_API_KEY',
     'DEBUG',
     'NODE_ENV'
   ];
@@ -365,6 +602,25 @@ async function handleInfoCommand(): Promise<void> {
     const value = process.env[varName];
     logger.keyValue(varName, value ? '✓ Set' : '✗ Not set');
   });
+}
+
+/**
+ * Handle the demo command
+ */
+async function handleDemoCommand(options: {
+  mock?: boolean;
+  outputDir?: string;
+}): Promise<void> {
+  try {
+    const demoRunner = new DemoRunner();
+    await demoRunner.runDemo({
+      mock: options.mock,
+      outputDir: options.outputDir,
+    });
+  } catch (error) {
+    logger.error('Demo failed', error);
+    throw error;
+  }
 }
 
 /**

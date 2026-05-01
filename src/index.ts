@@ -18,18 +18,18 @@ async function initialize(): Promise<void> {
   dotenv.config();
 
   // Check for API key in environment or config
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.IBM_WATSONX_API_KEY;
   
   if (!apiKey) {
-    logger.debug('No ANTHROPIC_API_KEY found in environment');
+    logger.debug('No IBM_WATSONX_API_KEY found in environment');
     
     // Check config file
     const configPath = getConfigPath();
     if (await fs.pathExists(configPath)) {
       try {
         const config = await fs.readJSON(configPath);
-        if (config.anthropicApiKey) {
-          process.env.ANTHROPIC_API_KEY = config.anthropicApiKey;
+        if (config.ibmWatsonxApiKey) {
+          process.env.IBM_WATSONX_API_KEY = config.ibmWatsonxApiKey;
           logger.debug('Loaded API key from config file');
         }
       } catch (error) {
@@ -126,7 +126,7 @@ function provideSuggestions(category: ErrorCategory): void {
       break;
 
     case ErrorCategory.AGENT:
-      logger.listItem('Verify Anthropic API key is set');
+      logger.listItem('Verify IBM watsonx API key is set');
       logger.listItem('Check API key permissions');
       logger.listItem('Ensure you have sufficient API credits');
       break;
@@ -198,6 +198,7 @@ setupExceptionHandlers();
 export { runCLI } from './cli/index.js';
 export { logger } from './utils/logger.js';
 export * from './types/index.js';
+export * from './reporting/index.js';
 
 // Run main if this is the entry point
 if (import.meta.url === `file://${process.argv[1]}`) {

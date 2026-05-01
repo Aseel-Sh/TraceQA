@@ -59,7 +59,7 @@ TraceQA is a developer-focused CLI tool that enables immediate testing of code c
 - **Completion Date:** 2026-05-01
 
 ### Phase 4: Intelligent Agent (Weeks 7-9) ✅ COMPLETE
-- [x] Claude API integration
+- [x] IBM watsonx.ai API integration
 - [x] Test planning logic
 - [x] Decision-making system
 - [x] Test execution orchestration

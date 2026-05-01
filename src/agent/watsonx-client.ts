@@ -8,8 +8,7 @@ import { IamAuthenticator } from 'ibm-cloud-sdk-core';
 import {
   AgentConfig,
   ConversationMessage,
-  ClaudeResponse,
-  ClaudeStreamChunk,
+  WatsonxStreamChunk,
   TokenUsage,
   TraceQAError,
   ErrorCategory
@@ -227,8 +226,9 @@ export class WatsonxClient {
       let outputTokens = 0;
 
       for await (const chunk of stream) {
-        if (chunk.results && chunk.results.length > 0) {
-          const result = chunk.results[0];
+        const parsedChunk = chunk as unknown as WatsonxStreamChunk;
+        if (parsedChunk.results && parsedChunk.results.length > 0) {
+          const result = parsedChunk.results[0];
           
           if (result.generated_text) {
             const text = result.generated_text;
