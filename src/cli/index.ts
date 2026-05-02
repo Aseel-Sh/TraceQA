@@ -92,7 +92,10 @@ For more information, visit: https://github.com/yourusername/traceqa
     .description('Run tests with new architecture (recommended)')
     .requiredOption('--acceptance-path <path>', 'Path to acceptance criteria file (required)')
     .requiredOption('--base-url <url>', 'Base URL of the application to test (required)')
-    .option('-o, --output-dir <path>', 'Output directory for reports and artifacts', 'traceqa-proof')
+    .option('-o, --output-dir <path>', 'Output directory for reports (default: traceqa-proof)', 'traceqa-proof')
+    .option('--generated-dir <path>', 'Directory for generated test artifacts (default: traceqa-generated)', 'traceqa-generated')
+    .option('--proof-dir <path>', 'Directory for proof reports (default: traceqa-proof)', 'traceqa-proof')
+    .option('--debug-dir <path>', 'Directory for debug output (default: traceqa-debug)', 'traceqa-debug')
     .option('-y, --yes', 'Auto-approve execution without confirmation')
     .option('--verbose', 'Enable verbose logging')
     .option('--debug', 'Enable debug mode')
@@ -470,6 +473,9 @@ async function handleRunCommand(options: {
   acceptancePath: string;
   baseUrl: string;
   outputDir?: string;
+  generatedDir?: string;
+  proofDir?: string;
+  debugDir?: string;
   yes?: boolean;
   verbose?: boolean;
   debug?: boolean;
@@ -505,11 +511,18 @@ async function handleRunCommand(options: {
     );
   }
 
+  // Set up directories with backward compatibility
+  const generatedDir = options.generatedDir || 'traceqa-generated';
+  const proofDir = options.proofDir || options.outputDir || 'traceqa-proof';
+  const debugDir = options.debugDir || 'traceqa-debug';
+
   // Display configuration
   logger.subsection('Configuration');
   logger.keyValue('Acceptance Criteria', acceptancePath);
   logger.keyValue('Base URL', options.baseUrl);
-  logger.keyValue('Output Directory', options.outputDir || 'traceqa-proof');
+  logger.keyValue('Generated Artifacts', generatedDir);
+  logger.keyValue('Proof Reports', proofDir);
+  logger.keyValue('Debug Output', debugDir);
   logger.newLine();
 
   // Show confirmation prompt unless --yes flag is provided
@@ -560,12 +573,16 @@ async function handleRunCommand(options: {
     await coordinator.runTestsWithNewArchitecture({
       acceptancePath,
       baseUrl: options.baseUrl,
-      outputDir: options.outputDir || 'traceqa-proof'
+      outputDir: proofDir,
+      generatedDir,
+      proofDir,
+      debugDir
     });
 
     logger.newLine();
     logger.success('✓ TraceQA execution completed successfully');
-    logger.info(`  Reports and artifacts: ${path.resolve(options.outputDir || 'traceqa-proof')}/`);
+    logger.info(`  Generated artifacts: ${path.resolve(generatedDir)}/`);
+    logger.info(`  Proof reports: ${path.resolve(proofDir)}/`);
     logger.newLine();
 
   } catch (error) {
@@ -731,10 +748,18 @@ async function executeTests(
     logger.newLine();
     logger.section('Running Tests with New Architecture');
     
+    // Set up directories with backward compatibility
+    const proofDir = config.outputDir || 'traceqa-proof';
+    const generatedDir = 'traceqa-generated';
+    const debugDir = 'traceqa-debug';
+    
     await coordinator.runTestsWithNewArchitecture({
       acceptancePath: tempAcceptancePath,
       baseUrl: config.baseUrl,
-      outputDir: config.outputDir || 'traceqa-proof'
+      outputDir: proofDir,
+      generatedDir,
+      proofDir,
+      debugDir
     });
 
     // Clean up temporary file
@@ -742,7 +767,8 @@ async function executeTests(
 
     logger.newLine();
     logger.success('✓ TraceQA execution completed successfully');
-    logger.info(`  Reports location: ${path.resolve(config.outputDir || 'traceqa-proof')}/`);
+    logger.info(`  Generated artifacts: ${path.resolve(generatedDir)}/`);
+    logger.info(`  Proof reports: ${path.resolve(proofDir)}/`);
     
   } catch (error) {
     logger.error('Test execution failed', error);

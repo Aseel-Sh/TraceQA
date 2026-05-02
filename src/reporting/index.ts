@@ -3,14 +3,19 @@
  * Exports report generation functionality
  */
 
-export { ReportGenerator } from './report-generator.js';
+export { ReportGenerator, generateReport } from './report-generator.js';
 
-// Re-export reporting types for convenience
+// Export new report types
+export type {
+  ReportSummary,
+  TraceMatrixEntry,
+  ReportData
+} from './report-generator.js';
+
+// Re-export core types for convenience
 export type {
   TraceMatrix,
-  TraceMatrixEntry,
-  MergeReadinessScore,
-  ReportData
+  MergeReadinessScore
 } from '../types/index.js';
 
 // Made with Bob

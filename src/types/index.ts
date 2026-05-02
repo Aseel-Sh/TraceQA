@@ -296,7 +296,29 @@ export class TraceQAError extends Error {
 /**
  * TraceQA configuration
  */
+/**
+ * Sample data for test generation
+ */
+export interface SampleData {
+  validUser?: Record<string, any>;
+  invalidEmail?: string;
+  weakPassword?: string;
+  [key: string]: any;
+}
+
+/**
+ * TraceQA configuration
+ */
 export interface TraceQAConfig {
+  projectName?: string;
+  baseUrl?: string;
+  healthUrl?: string;
+  apiPrefix?: string;
+  sampleData?: SampleData;
+  generatedDir?: string;
+  proofDir?: string;
+  timeout?: number;
+  retries?: number;
   ibmWatsonxApiKey?: string;
   defaultRepository?: string;
   mcpServers?: MCPServerConfig[];
@@ -304,6 +326,7 @@ export interface TraceQAConfig {
   maxRetries?: number;
   reportFormat?: 'json' | 'html' | 'markdown';
   outputDir?: string;
+  [key: string]: any;
 }
 
 /**
@@ -917,6 +940,9 @@ export type ExecutionMode = 'automated' | 'manual' | 'uncertain';
 /**
  * Individual step within a QA task
  */
+/**
+ * Individual step within a QA task
+ */
 export interface QATaskStep {
   description: string;
   action?: string;
@@ -930,15 +956,15 @@ export interface QATask {
   taskId: string;
   acceptanceCriterionId: string;
   title: string;
-  type: QATaskType;
-  priority: QATaskPriority;
+  type: 'api' | 'ui' | 'integration' | 'manual' | 'uncertain';
+  priority: 'high' | 'medium' | 'low';
   preconditions: string[];
-  setupData?: Record<string, any>;
+  setupData: Record<string, any>;
   steps: QATaskStep[];
   expectedResult: string;
-  executionMode: ExecutionMode;
+  executionMode: 'automated' | 'manual' | 'uncertain';
   reasoning: string;
-  uncertainReason?: string;
+  uncertainReason?: string | null;
 }
 
 /**
@@ -969,17 +995,19 @@ export type TestStatus = 'ready' | 'uncertain' | 'manual' | 'skipped';
 /**
  * Individual HTTP test step
  */
+/**
+ * Individual HTTP test step
+ */
 export interface HTTPTestStep {
   stepId: string;
-  description?: string;
-  method: string;
+  description: string;
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
   url: string;
-  headers?: Record<string, string>;
-  body?: any;
+  headers: Record<string, string>;
+  body: Record<string, any> | null;
   expectedStatus: number;
   acceptableStatuses: number[];
   expectedBodyContains?: string[];
-  expectedBodySchema?: Record<string, any>;
 }
 
 /**
@@ -988,14 +1016,12 @@ export interface HTTPTestStep {
 export interface GeneratedHTTPTest {
   id: string;
   acceptanceCriterionId: string;
-  qaTaskId?: string;
+  qaTaskId: string;
   title: string;
-  type: 'api';
-  status: TestStatus;
+  type: 'api' | 'ui' | 'integration' | 'manual';
+  status: 'ready' | 'uncertain' | 'manual';
   uncertainReason?: string | null;
   steps: HTTPTestStep[];
-  setupRequired?: boolean;
-  teardownRequired?: boolean;
 }
 
 /**
@@ -1032,19 +1058,22 @@ export interface AssertionResult {
 /**
  * HTTP step execution result
  */
+/**
+ * HTTP step execution result
+ */
 export interface HTTPStepResult {
   stepId: string;
+  description: string;
   method: string;
   url: string;
-  requestBody?: any;
+  requestBody: Record<string, any> | null;
   expectedStatus: number;
   acceptableStatuses: number[];
-  actualStatus?: number;
-  responseBody?: any;
-  duration: number;
+  actualStatus: number;
+  responseBody: any;
   passed: boolean;
-  error?: string;
-  assertions: AssertionResult[];
+  duration: number;
+  error: string | null;
 }
 
 /**
@@ -1052,13 +1081,16 @@ export interface HTTPStepResult {
  */
 export interface HTTPTestResult {
   testId: string;
-  title: string;
   acceptanceCriterionId: string;
-  status: 'passed' | 'failed' | 'uncertain' | 'skipped';
-  steps: HTTPStepResult[];
+  qaTaskId: string;
+  title: string;
+  status: 'passed' | 'failed' | 'uncertain' | 'manual' | 'skipped';
+  executor: 'http' | 'mcp-browser' | 'manual' | 'uncertain';
+  stepResults: HTTPStepResult[];
+  evidence: string[];
+  classification: 'application_failure' | 'traceqa_generation_issue' | 'uncertain' | 'manual' | 'passed';
   duration: number;
-  error?: string;
-  message?: string;
+  timestamp: string;
 }
 
 // ============================================================================
@@ -1360,6 +1392,19 @@ export interface DiffAnalysis {
   impactedAreas: string[];
   riskLevel: 'high' | 'medium' | 'low';
   suggestedTestFocus: string[];
+}
+
+// ============================================================================
+// Directory Configuration Types
+// ============================================================================
+
+/**
+ * Directory configuration for TraceQA artifacts
+ */
+export interface DirectoryConfig {
+  generatedDir: string;
+  proofDir: string;
+  debugDir: string;
 }
 
 

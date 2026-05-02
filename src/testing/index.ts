@@ -39,6 +39,16 @@ export type {
   NormalizationOptions
 } from './test-normalizer.js';
 
+// HTTP Test Executor
+export {
+  executeHTTPTest,
+  executeHTTPTests
+} from './http-test-executor.js';
+
+export type {
+  HTTPTestExecutionResult
+} from './http-test-executor.js';
+
 // Re-export testing-related types from types module
 export type {
   // API Testing Types

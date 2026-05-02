@@ -443,18 +443,55 @@ function generateTestsMarkdown(
 }
 
 /**
+ * Write metadata file (new architecture)
+ */
+export async function writeGeneratedMetadata(
+  metadata: {
+    generatedAt: string;
+    ibmUsed: boolean;
+    normalizationApplied: boolean;
+    warnings: string[];
+  },
+  outputDir: string = OUTPUT_DIR
+): Promise<void> {
+  await ensureOutputDir(outputDir);
+  
+  const filePath = path.join(outputDir, 'metadata.json');
+  
+  logger.info(`Writing metadata to ${filePath}...`);
+  
+  await fs.writeFile(
+    filePath,
+    JSON.stringify(metadata, null, 2),
+    'utf-8'
+  );
+  
+  logger.success(`✓ Metadata written to ${filePath}`);
+}
+
+/**
  * Write all generated artifacts at once (new architecture)
  */
 export async function writeAllGeneratedArtifacts(
   taskPlan: QATaskPlan,
   testSuite: GeneratedHTTPTestSuite,
-  outputDir: string = OUTPUT_DIR
+  outputDir: string = OUTPUT_DIR,
+  metadata?: {
+    generatedAt: string;
+    ibmUsed: boolean;
+    normalizationApplied: boolean;
+    warnings: string[];
+  }
 ): Promise<void> {
   logger.info('Writing all generated artifacts...');
   
   await writeQATaskPlan(taskPlan, outputDir);
   await writeGeneratedHTTPTests(testSuite, outputDir);
   await writeGeneratedTestsMarkdown(taskPlan, testSuite, outputDir);
+  
+  if (metadata) {
+    await writeGeneratedMetadata(metadata, outputDir);
+  }
   
   logger.success('✓ All generated artifacts written successfully');
 }

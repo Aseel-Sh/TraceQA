@@ -12,10 +12,19 @@ import { APITester } from './api-tester.js';
 import { WebTester } from './web-tester.js';
 import { TestNormalizer, NormalizedTest } from './test-normalizer.js';
 import { QATaskGenerator, HTTPTestGenerator } from '../generators/qa-task-generator.js';
-import { writeAllGeneratedArtifacts } from '../generators/artifact-writer.js';
+import {
+  writeAllGeneratedArtifacts,
+  writeQATaskPlan,
+  writeGeneratedHTTPTests,
+  writeGeneratedTestsMarkdown,
+  writeGeneratedMetadata
+} from '../generators/artifact-writer.js';
 import { parseAcceptanceCriteriaFromFile } from '../parsers/acceptance-parser.js';
 import { discoverRoutes } from '../discovery/route-discovery.js';
 import { ReportGenerator } from '../reporting/report-generator.js';
+import { generateQATaskPlan } from '../generators/qa-task-plan-generator.js';
+import { generateHTTPTests } from '../generators/http-test-generator.js';
+import { executeHTTPTests } from './http-test-executor.js';
 import {
   TestConfig,
   TestContext,
@@ -37,7 +46,9 @@ import {
   APIAssertion,
   DiffAnalysis,
   QATaskPlan,
-  GeneratedHTTPTestSuite
+  GeneratedHTTPTestSuite,
+  HTTPTestResult,
+  TraceQAConfig
 } from '../types/index.js';
 import { RouteDiscoveryResult } from '../discovery/route-discovery.js';
 import { logger, formatDuration } from '../utils/logger.js';
@@ -204,26 +215,46 @@ export class TestCoordinator {
     acceptancePath: string;
     baseUrl: string;
     outputDir?: string;
+    generatedDir?: string;
+    proofDir?: string;
+    debugDir?: string;
   }): Promise<void> {
-    const { acceptancePath, baseUrl, outputDir = 'traceqa-proof' } = options;
+    const {
+      acceptancePath,
+      baseUrl,
+      outputDir = 'traceqa-proof',
+      generatedDir = 'traceqa-generated',
+      proofDir = 'traceqa-proof',
+      debugDir = 'traceqa-debug'
+    } = options;
+
+    const warnings: string[] = [];
+    let ibmUsed = false;
 
     try {
-      logger.info('Starting TraceQA test execution...');
+      logger.info('Starting TraceQA test execution with new architecture...');
+      logger.newLine();
 
       // Phase 1: Parse acceptance criteria
-      logger.info('Phase 1: Parsing acceptance criteria...');
+      logger.section('Phase 1: Parsing acceptance criteria');
       const parsed = await parseAcceptanceCriteriaFromFile(acceptancePath);
       const acceptanceCriteria = parsed.criteria;
       logger.success(`✓ Parsed ${acceptanceCriteria.length} acceptance criteria`);
+      logger.newLine();
 
       // Phase 2: Discover routes
-      logger.info('Phase 2: Discovering API routes...');
+      logger.section('Phase 2: Discovering API routes');
       const discoveryResult = await discoverRoutes(process.cwd());
       const routes = discoveryResult?.routes || [];
       logger.success(`✓ Discovered ${routes.length} routes`);
+      if (routes.length === 0) {
+        warnings.push('No routes discovered - tests may be limited');
+        logger.warn('⚠ No routes discovered - tests may be limited');
+      }
+      logger.newLine();
 
-      // Phase 3: Get AI suggestions (can fail gracefully)
-      logger.info('Phase 3: Getting AI QA task suggestions...');
+      // Phase 3-5: Keep existing phases for backward compatibility
+      logger.section('Phase 3: Getting AI suggestions (optional)');
       let aiSuggestions: any[] = [];
       try {
         aiSuggestions = await this.agent.generateTests(
@@ -234,93 +265,267 @@ export class TestCoordinator {
         
         if (aiSuggestions.length > 0) {
           logger.success(`✓ Received ${aiSuggestions.length} AI task suggestions`);
+          ibmUsed = true;
         } else {
           logger.warn('⚠ No AI suggestions received, using deterministic fallback');
+          warnings.push('AI suggestions not available - using deterministic fallback');
         }
       } catch (error) {
         logger.warn('⚠ AI suggestion generation failed, using deterministic fallback');
         logger.debug('AI error:', error);
+        warnings.push(`AI generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
+      logger.newLine();
 
-      // Phase 4: Generate QA task plan (validates AI + deterministic fallback)
-      logger.info('Phase 4: Generating QA task plan...');
-      const qaTaskGenerator = new QATaskGenerator(baseUrl, routes);
-      const qaTaskPlan: QATaskPlan = qaTaskGenerator.generateTaskPlan(
+      // Phase 6: Generate QA task plan using new architecture
+      logger.section('Phase 6: Generating QA task plan');
+      
+      // Build config object
+      const traceQAConfig: TraceQAConfig = {
+        baseUrl,
+        ibmWatsonxApiKey: process.env.IBM_WATSONX_API_KEY,
+        ibmWatsonxProjectId: process.env.IBM_WATSONX_PROJECT_ID,
+        ibmWatsonxUrl: process.env.IBM_WATSONX_URL,
+        maxRetries: 3,
+        timeout: 30000,
+      };
+      
+      const projectContext = {
+        projectName: 'TraceQA Project',
+        baseUrl,
+      };
+      
+      const qaTaskPlanResult = await generateQATaskPlan(
         acceptanceCriteria,
-        aiSuggestions
+        routes,
+        traceQAConfig,
+        projectContext
       );
       
-      const automatedCount = qaTaskPlan.tasks.filter(t => t.executionMode === 'automated').length;
-      const manualCount = qaTaskPlan.tasks.filter(t => t.executionMode === 'manual').length;
-      const uncertainCount = qaTaskPlan.tasks.filter(t => t.executionMode === 'uncertain').length;
+      const qaTaskPlan = qaTaskPlanResult.taskPlan;
+      warnings.push(...qaTaskPlanResult.warnings);
+      ibmUsed = qaTaskPlanResult.ibmUsed || ibmUsed;
       
-      logger.success(`✓ Generated QA task plan: ${qaTaskPlan.tasks.length} tasks total`);
-      logger.info(`  - ${automatedCount} automated`);
-      logger.info(`  - ${manualCount} manual`);
-      logger.info(`  - ${uncertainCount} uncertain`);
+      logger.success(`✓ Generated ${qaTaskPlan.summary.totalTasks} QA tasks`);
+      logger.info(`  - ${qaTaskPlan.summary.automatedTasks} automated`);
+      logger.info(`  - ${qaTaskPlan.summary.manualTasks} manual`);
+      logger.info(`  - ${qaTaskPlan.summary.uncertainTasks} uncertain`);
+      
+      // Write QA task plan
+      await writeQATaskPlan(qaTaskPlan, generatedDir);
+      logger.newLine();
 
-      // Phase 5: Generate executable HTTP tests
-      logger.info('Phase 5: Generating executable HTTP tests...');
-      const httpTestGenerator = new HTTPTestGenerator(baseUrl, routes);
-      const httpTestSuite: GeneratedHTTPTestSuite = httpTestGenerator.generateTestSuite(
-        qaTaskPlan
+      // Phase 7: Generate HTTP tests using new architecture
+      logger.section('Phase 7: Generating HTTP tests');
+      
+      const httpTestResult = await generateHTTPTests(
+        qaTaskPlan,
+        routes,
+        traceQAConfig,
+        projectContext
       );
       
-      logger.success(`✓ Generated ${httpTestSuite.tests.length} executable HTTP tests`);
+      const testSuite = httpTestResult.testSuite;
+      warnings.push(...httpTestResult.warnings);
+      ibmUsed = httpTestResult.ibmUsed || ibmUsed;
+      
+      logger.success(`✓ Generated ${testSuite.summary.totalTests} HTTP tests`);
+      logger.info(`  - ${testSuite.summary.readyTests} ready`);
+      logger.info(`  - ${testSuite.summary.uncertainTests} uncertain`);
+      logger.info(`  - ${testSuite.summary.manualTests} manual`);
+      
+      // Write HTTP tests and documentation
+      await writeGeneratedHTTPTests(testSuite, generatedDir);
+      await writeGeneratedTestsMarkdown(qaTaskPlan, testSuite, generatedDir);
+      
+      // Write metadata
+      const metadata = {
+        generatedAt: new Date().toISOString(),
+        ibmUsed,
+        normalizationApplied: httpTestResult.normalizationApplied,
+        warnings
+      };
+      await writeGeneratedMetadata(metadata, generatedDir);
+      logger.newLine();
 
-      // Phase 6: Write all artifacts
-      logger.info('Phase 6: Writing generated artifacts...');
-      await writeAllGeneratedArtifacts(qaTaskPlan, httpTestSuite, outputDir);
-      logger.success(`✓ Artifacts written to ${outputDir}/`);
+      // Phase 8: Execute ready tests using new architecture
+      logger.section('Phase 8: Executing ready tests');
+      const readyTests = testSuite.tests.filter(t => t.status === 'ready');
+      const uncertainTests = testSuite.tests.filter(t => t.status === 'uncertain');
+      const manualTests = testSuite.tests.filter(t => t.status === 'manual');
+      
+      let executionResults: TestResult[] = [];
+      let httpTestResults: HTTPTestResult[] = [];
+      
+      if (readyTests.length > 0) {
+        logger.info(`Executing ${readyTests.length} ready test(s)...`);
+        
+        try {
+          const executionResult = await executeHTTPTests(testSuite, traceQAConfig);
+          
+          // Store HTTP test results for new report generator
+          httpTestResults = executionResult.results;
+          
+          // Convert HTTPTestResult[] to TestResult[] for backward compatibility
+          executionResults = httpTestResults.map(r => ({
+            testCaseId: r.testId,
+            testCaseName: r.title,
+            passed: r.status === 'passed',
+            message: r.status === 'passed' ? 'Test passed' : `Test ${r.status}`,
+            timestamp: r.timestamp,
+            duration: r.duration,
+            error: r.status === 'failed' ? r.evidence.join('; ') : undefined,
+          }));
+          
+          const passed = executionResults.filter(r => r.passed).length;
+          const failed = executionResults.filter(r => !r.passed).length;
+          
+          logger.success(`✓ Executed ${readyTests.length} tests (${passed} passed, ${failed} failed)`);
+        } catch (error) {
+          logger.error('Test execution failed:', error);
+          warnings.push(`Test execution error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      } else {
+        logger.warn('⚠ No ready tests to execute');
+      }
+      
+      if (uncertainTests.length > 0) {
+        logger.warn(`⚠ Skipped ${uncertainTests.length} uncertain test(s)`);
+        
+        // Record uncertain tests without execution
+        for (const test of uncertainTests) {
+          executionResults.push({
+            testCaseId: test.id,
+            testCaseName: test.title,
+            passed: false,
+            message: `Uncertain: ${test.uncertainReason || 'Unable to generate test'}`,
+            timestamp: new Date().toISOString(),
+            duration: 0,
+            error: test.uncertainReason || undefined
+          });
+        }
+      }
+      
+      if (manualTests.length > 0) {
+        logger.warn(`⚠ Skipped ${manualTests.length} manual test(s)`);
+        
+        // Record manual tests without execution
+        for (const test of manualTests) {
+          executionResults.push({
+            testCaseId: test.id,
+            testCaseName: test.title,
+            passed: false,
+            message: 'Manual test - requires human execution',
+            timestamp: new Date().toISOString(),
+            duration: 0,
+            error: 'Manual test'
+          });
+        }
+      }
+      logger.newLine();
 
-      // Phase 7: Execute HTTP tests
-      logger.info('Phase 7: Executing HTTP tests...');
-      // Note: Actual test execution would be implemented here
-      // For now, we're focusing on the generation pipeline
-      logger.info(`Generated ${httpTestSuite.tests.length} tests ready for execution`);
-
-      // Phase 8: Generate report
-      logger.info('Phase 8: Generating test report...');
+      // Phase 9: Generate reports using new architecture
+      logger.section('Phase 9: Generating reports');
       const reportGenerator = new ReportGenerator();
       
-      // Create a mock TestResults for report generation
-      const testResults: TestResults = {
-        summary: {
-          total: httpTestSuite.tests.length,
-          passed: 0,
-          failed: 0,
-          skipped: httpTestSuite.tests.length,
+      // Collect all HTTP test results (executed + uncertain + manual)
+      const allHttpTestResults: HTTPTestResult[] = [...httpTestResults];
+      
+      // Add uncertain tests as HTTPTestResult
+      for (const test of uncertainTests) {
+        allHttpTestResults.push({
+          testId: test.id,
+          acceptanceCriterionId: test.acceptanceCriterionId,
+          qaTaskId: test.qaTaskId,
+          title: test.title,
+          status: 'uncertain',
+          executor: 'uncertain',
+          stepResults: [],
+          evidence: [test.uncertainReason || 'Unable to generate test'],
+          classification: 'uncertain',
           duration: 0,
-          successRate: 0
-        },
-        results: [],
-        repository: {
-          path: process.cwd(),
-          name: 'current',
-          branch: 'current'
-        },
-        timestamp: new Date().toISOString()
-      };
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      // Add manual tests as HTTPTestResult
+      for (const test of manualTests) {
+        allHttpTestResults.push({
+          testId: test.id,
+          acceptanceCriterionId: test.acceptanceCriterionId,
+          qaTaskId: test.qaTaskId,
+          title: test.title,
+          status: 'manual',
+          executor: 'manual',
+          stepResults: [],
+          evidence: ['Manual test - requires human execution'],
+          classification: 'manual',
+          duration: 0,
+          timestamp: new Date().toISOString()
+        });
+      }
 
       await reportGenerator.generateReport(
-        testResults,
-        acceptanceCriteria.map(c => `${c.id}: ${c.description}`),
-        outputDir
+        acceptanceCriteria,
+        qaTaskPlan,
+        testSuite,
+        allHttpTestResults,
+        { outputDir: proofDir, projectName: projectContext.projectName }
       );
       
-      logger.success(`✓ Report generated in ${outputDir}/`);
+      logger.success(`✓ Reports generated in ${proofDir}/`);
+      logger.newLine();
 
       // Summary
-      logger.info('\n=== Test Generation Summary ===');
-      logger.info(`Total QA Tasks: ${qaTaskPlan.tasks.length}`);
-      logger.info(`  - Automated: ${automatedCount}`);
-      logger.info(`  - Manual: ${manualCount}`);
-      logger.info(`  - Uncertain: ${uncertainCount}`);
-      logger.info(`Generated HTTP Tests: ${httpTestSuite.tests.length}`);
-      logger.info(`Artifacts: ${outputDir}/`);
+      logger.section('Test Execution Summary');
+      
+      // Calculate summary statistics
+      const passed = executionResults.filter(r => r.passed).length;
+      const failed = executionResults.filter(r => !r.passed).length;
+      
+      logger.keyValue('Total QA Tasks', qaTaskPlan.summary.totalTasks.toString());
+      logger.keyValue('  - Automated', qaTaskPlan.summary.automatedTasks.toString());
+      logger.keyValue('  - Manual', qaTaskPlan.summary.manualTasks.toString());
+      logger.keyValue('  - Uncertain', qaTaskPlan.summary.uncertainTasks.toString());
+      logger.newLine();
+      logger.keyValue('Total HTTP Tests', testSuite.summary.totalTests.toString());
+      logger.keyValue('  - Ready', testSuite.summary.readyTests.toString());
+      logger.keyValue('  - Uncertain', testSuite.summary.uncertainTests.toString());
+      logger.keyValue('  - Manual', testSuite.summary.manualTests.toString());
+      logger.newLine();
+      logger.keyValue('Execution Results', '');
+      logger.keyValue('  - Passed', passed.toString());
+      logger.keyValue('  - Failed', failed.toString());
+      logger.keyValue('  - Skipped', (uncertainTests.length + manualTests.length).toString());
+      logger.newLine();
+      logger.keyValue('Artifacts', generatedDir + '/');
+      logger.keyValue('Reports', proofDir + '/');
+      
+      if (warnings.length > 0) {
+        logger.newLine();
+        logger.warn('Warnings:');
+        warnings.forEach(w => logger.warn(`  - ${w}`));
+      }
 
     } catch (error) {
       logger.error('Test execution failed:', error);
+      
+      // Write debug information
+      try {
+        const fs = await import('fs-extra');
+        const path = await import('path');
+        await fs.ensureDir(debugDir);
+        await fs.writeFile(
+          path.join(debugDir, 'error.log'),
+          `Error: ${error instanceof Error ? error.message : String(error)}\n` +
+          `Stack: ${error instanceof Error ? error.stack : 'N/A'}\n` +
+          `Timestamp: ${new Date().toISOString()}\n`,
+          'utf-8'
+        );
+      } catch (debugError) {
+        logger.debug('Failed to write debug log:', debugError);
+      }
+      
       throw error;
     }
   }
