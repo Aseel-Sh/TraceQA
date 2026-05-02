@@ -249,27 +249,18 @@ export class TestCoordinator {
       }
       logger.newLine();
 
-      // Phase 3-5: Keep existing phases for backward compatibility
-      logger.section('Phase 3: Getting AI suggestions (optional)');
-      let aiSuggestions: any[] = [];
+      // Phase 3: Prepare per-run debug directory and skip redundant AI suggestions by default
+      logger.section('Phase 3: Preparing debug output');
       try {
-        aiSuggestions = await this.agent.generateTests(
-          acceptanceCriteria,
-          routes,
-          baseUrl
-        );
-        
-        if (aiSuggestions.length > 0) {
-          logger.success(`✓ Received ${aiSuggestions.length} AI task suggestions`);
-          ibmUsed = true;
-        } else {
-          logger.warn('⚠ No AI suggestions received, using deterministic fallback');
-          warnings.push('AI suggestions not available - using deterministic fallback');
-        }
-      } catch (error) {
-        logger.warn('⚠ AI suggestion generation failed, using deterministic fallback');
-        logger.debug('AI error:', error);
-        warnings.push(`AI generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        const fs = await import('fs-extra');
+        const path = await import('path');
+        const runDir = path.join(process.cwd(), debugDir || 'traceqa-debug', `${Date.now()}`);
+        await fs.ensureDir(runDir);
+        // Expose run debug directory so downstream modules may write into it
+        process.env.TRACEQA_DEBUG_DIR = runDir;
+        logger.info(`Debug output directory: ${runDir}`);
+      } catch (err) {
+        logger.warn('Failed to prepare per-run debug directory');
       }
       logger.newLine();
 

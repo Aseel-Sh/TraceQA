@@ -24,36 +24,58 @@ export function assessTestDataConfidence(
   method: string,
   route: DiscoveredRoute | null,
   openApiSpec: any,
-  config: TraceQAConfig
+  config: TraceQAConfig,
+  ibmConfidence: number = 0
 ): TestDataConfidenceResult {
   const reasons: string[] = [];
-  if (!body) {
-    reasons.push('No request body generated');
-    return { confidence: 0.0, reasons };
+
+  // Start from IBM-provided confidence as a baseline
+  let score = typeof ibmConfidence === 'number' ? Math.max(0, Math.min(1, ibmConfidence)) : 0.3;
+  reasons.push(`Baseline IBM confidence: ${score.toFixed(2)}`);
+
+  // Short-circuit for GET/HEAD: bodies are not required
+  const methodUpper = (method || 'GET').toUpperCase();
+  if (methodUpper === 'GET' || methodUpper === 'HEAD') {
+    if (route) {
+      reasons.push('GET/HEAD route discovered — request body not required');
+      score = Math.max(score, 0.9);
+      return { confidence: score, reasons };
+    }
+    reasons.push('GET/HEAD with no discovered route — relying on baseline confidence');
+    return { confidence: score, reasons };
   }
 
-  // If OpenAPI is present and contains the route, do schema checks
+  // If no body was generated for methods that normally accept a body, that's acceptable
+  if (!body) {
+    reasons.push('No request body generated for non-GET method — treated as acceptable');
+    // keep baseline score
+    return { confidence: score, reasons };
+  }
+
+  // If OpenAPI is present and contains the route, do schema checks and boost/penalize accordingly
   if (openApiSpec && route && openApiSpec.paths) {
     try {
-      const pathItem = openApiSpec.paths[route.path] || openApiSpec.paths[route.path.replace(/:\w+/g, '{$1}')] || null;
-      const operation = pathItem && pathItem[method.toLowerCase()];
+      const pathItem = openApiSpec.paths[route.path] || openApiSpec.paths[route.path.replace(/:\\w+/g, '{$1}')] || null;
+      const operation = pathItem && pathItem[methodUpper.toLowerCase()];
       if (operation && operation.requestBody) {
-        // Basic required field check
         const req = operation.requestBody;
         const content = req.content || req;
         const schema = (content['application/json'] && content['application/json'].schema) || content.schema;
         if (schema) {
-          const required = schema.required || (schema.properties ? Object.keys(schema.properties).filter(() => false) : []);
-          // If schema lists required, increase confidence if body has them
-          if (Array.isArray(required) && required.length > 0) {
+          const required = Array.isArray(schema.required) ? schema.required : [];
+          if (required.length > 0) {
             const missing = required.filter((r: string) => !(r in body));
             if (missing.length === 0) {
               reasons.push('Body satisfies OpenAPI required fields');
-              return { confidence: 0.95, reasons };
+              score = Math.max(score, 0.95);
             } else {
               reasons.push(`Body missing OpenAPI required fields: ${missing.join(', ')}`);
-              return { confidence: 0.15, reasons };
+              score = Math.min(score, 0.15);
+              return { confidence: score, reasons };
             }
+          } else {
+            reasons.push('OpenAPI schema present but no required fields declared');
+            score = Math.max(score, score + 0.05);
           }
         }
       }
@@ -62,42 +84,51 @@ export function assessTestDataConfidence(
     }
   }
 
-  // If route contains validation snippets, do lightweight checks
+  // If route contains validation snippets, give a modest boost if body looks object-like
   if (route && Array.isArray(route.validationSnippets) && route.validationSnippets.length > 0) {
-    // If snippets mention 'required' or schema-like properties, prefer medium confidence
     const joined = route.validationSnippets.join(' ').toLowerCase();
     if (joined.includes('required') || joined.includes('schema') || joined.includes('joi') || joined.includes('zod')) {
-      // If body has more than 1 field, assume medium confidence
-      const keys = body ? Object.keys(body).length : 0;
-      if (keys >= 1) {
-        reasons.push('Route validation snippets found; body appears structurally compatible');
-        return { confidence: 0.6, reasons };
-      }
-      reasons.push('Route validation snippets found but body is very small');
-      return { confidence: 0.2, reasons };
+      reasons.push('Route validation snippets found — boosting confidence');
+      if (typeof body === 'object' && !Array.isArray(body)) score = Math.min(1, score + 0.12);
     }
   }
 
-  // If config.sampleData exists and appears to match fields, increase confidence
+  // If config.sampleData exists and overlaps with generated body keys, boost
   if (config && config.sampleData) {
     const sampleKeys = Object.keys(config.sampleData || {}).length;
     if (sampleKeys > 0) {
       const overlap = Object.keys(body).filter(k => k in (config.sampleData as any));
       if (overlap.length > 0) {
-        reasons.push('Body fields overlap with config sample data');
-        return { confidence: 0.7, reasons };
+        reasons.push('Body fields overlap with config sample data — boosting confidence');
+        score = Math.min(1, score + 0.1);
       }
     }
   }
 
-  // Heuristic: if body has more than 2 fields, assume low-medium confidence
-  if (body && Object.keys(body).length >= 2) {
-    reasons.push('Body has multiple fields; moderate confidence');
-    return { confidence: 0.5, reasons };
+  // If route was discovered and method/path match, boost confidence
+  if (route) {
+    reasons.push('Route matched discovered route — boosting confidence');
+    score = Math.min(1, score + 0.15);
   }
 
-  reasons.push('Insufficient evidence to trust generated body');
-  return { confidence: 0.1, reasons };
+  // If body is an object for JSON POST/PUT/PATCH, add a small boost (do not penalize multiple fields)
+  if (['POST','PUT','PATCH'].includes(methodUpper) && typeof body === 'object' && !Array.isArray(body)) {
+    reasons.push('Body is an object for data-bearing method — small confidence boost');
+    score = Math.min(1, score + 0.08);
+  }
+
+  // Final clamping
+  score = Math.max(0, Math.min(1, score));
+
+  if (score >= 0.8) {
+    reasons.push('High overall confidence');
+  } else if (score >= 0.5) {
+    reasons.push('Medium overall confidence');
+  } else {
+    reasons.push('Low overall confidence');
+  }
+
+  return { confidence: score, reasons };
 }
 
 // Made with Bob

@@ -305,9 +305,8 @@ export class ReportGenerator {
     ).length;
 
     // Execution results statistics
-    const executed = testResults.filter(
-      r => r.status !== 'skipped' && r.status !== 'manual'
-    ).length;
+    // Consider only actually executed tests (passed/failed) as "executed"; uncertain/manual are not executed
+    const executed = testResults.filter(r => r.status === 'passed' || r.status === 'failed').length;
     const passed = testResults.filter(r => r.status === 'passed').length;
     const failed = testResults.filter(r => r.status === 'failed').length;
     const uncertain = testResults.filter(r => r.status === 'uncertain').length;

@@ -206,12 +206,24 @@ function normalizeGeneratedTest(
     return null;
   }
 
-  const acceptanceCriterionId = typeof rawTest.acceptanceCriterionId === 'string'
-    ? rawTest.acceptanceCriterionId
-    : acceptanceCriterion.id;
-
-  if (acceptanceCriterionId !== acceptanceCriterion.id) {
-    warnings.push(`Acceptance criterion mismatch: ${acceptanceCriterionId} != ${acceptanceCriterion.id}`);
+  // Enforce acceptanceCriterionId to equal the task's acceptance criterion
+  const rawAcId = typeof rawTest.acceptanceCriterionId === 'string' ? rawTest.acceptanceCriterionId : undefined;
+  const acceptanceCriterionId = acceptanceCriterion.id;
+  if (rawAcId && rawAcId !== acceptanceCriterionId) {
+    // Do not silently accept wrong AC IDs — mark uncertain and explain mapping mismatch
+    return {
+      id: typeof rawTest.id === 'string' && rawTest.id.trim().length > 0 ? rawTest.id : `TC-${task.taskId.replace('QA-', '')}`,
+      qaTaskId: task.taskId,
+      acceptanceCriterionId,
+      title: typeof rawTest.title === 'string' && rawTest.title.trim().length > 0 ? rawTest.title.trim() : task.title,
+      type: 'api',
+      status: 'uncertain',
+      uncertainReason: `Acceptance criterion mapping mismatch: IBM returned ${rawAcId} but task expects ${acceptanceCriterionId}`,
+      steps: [],
+      reasoning: typeof rawTest.reasoning === 'string' ? rawTest.reasoning : task.reasoning,
+      confidence: typeof rawTest.confidence === 'number' ? rawTest.confidence : 0,
+      executionMode: (rawTest.executionMode as any) || 'uncertain'
+    } as GeneratedHTTPTest;
   }
 
   const confidence = typeof rawTest.confidence === 'number' ? rawTest.confidence : 0;
@@ -612,10 +624,25 @@ async function generateTestsWithIBM(
           const firstStep = normalized.steps && normalized.steps.length > 0 ? normalized.steps[0] : null;
           if (firstStep) {
             const route = firstStep && discoveredRoutes.find(r => r.path && pathMatchesDiscoveredRoute(r.path, new URL(firstStep.url).pathname) && r.method.toUpperCase() === firstStep.method.toUpperCase()) || null;
-            const assessment = assessTestDataConfidence(firstStep.body, firstStep.method, route, projectContext.openApiSpec, config);
-            if (assessment.confidence < 0.6) {
+
+            // GET routes do not require body confidence — if route matches and expected status looks valid, mark ready
+            try {
+              if (firstStep.method.toUpperCase() === 'GET' && route && typeof firstStep.expectedStatus === 'number' && firstStep.expectedStatus === 200) {
+                normalized.status = 'ready';
+                normalized.executionMode = 'automated';
+                normalized.uncertainReason = null;
+              } else {
+                // Use IBM confidence as baseline when assessing generated data
+                const assessment = assessTestDataConfidence(firstStep.body, firstStep.method, route, projectContext.openApiSpec, config, normalized.confidence || 0);
+                if (assessment.confidence < 0.6) {
+                  normalized.status = 'uncertain';
+                  normalized.uncertainReason = `Low confidence in generated request data: ${assessment.reasons.join('; ')}`;
+                  normalized.executionMode = 'uncertain';
+                }
+              }
+            } catch (e) {
               normalized.status = 'uncertain';
-              normalized.uncertainReason = `Low confidence in generated request data: ${assessment.reasons.join('; ')}`;
+              normalized.uncertainReason = 'Failed to assess test data confidence';
               normalized.executionMode = 'uncertain';
             }
           }
@@ -1188,7 +1215,9 @@ function generateFallbackTest(
  */
 function saveRawIBMResponse(response: string, taskId: string): void {
   try {
-    const debugDir = join(process.cwd(), 'traceqa-debug');
+    const envDir = process.env.TRACEQA_DEBUG_DIR;
+    const defaultDir = join(process.cwd(), 'traceqa-debug');
+    const debugDir = envDir ? envDir : defaultDir;
     mkdirSync(debugDir, { recursive: true });
     
     const filename = `ibm-http-test-${taskId}-${Date.now()}.txt`;
