@@ -8,6 +8,10 @@ export interface DiscoveredRoute {
   handler?: string;
   file?: string;
   line?: number;
+  /** Optional nearby source snippet (few lines) to help infer validation or schema */
+  sourceSnippet?: string;
+  /** Optional small set of validation/schema snippets discovered near handler */
+  validationSnippets?: string[];
 }
 
 export interface RouteDiscoveryResult {
@@ -33,11 +37,15 @@ const FRAMEWORK_PATTERNS: FrameworkPattern[] = [
       const method = match[1].toUpperCase();
       const routePath = match[2];
       const line = content.substring(0, match.index).split('\n').length;
+      const snippet = extractNearbySnippet(content, match.index || 0, 8);
+      const validations = extractValidationSnippets(snippet);
       return [{
         method,
         path: routePath,
         file: filePath,
-        line
+        line,
+        sourceSnippet: snippet,
+        validationSnippets: validations,
       }];
     }
   },
@@ -50,11 +58,15 @@ const FRAMEWORK_PATTERNS: FrameworkPattern[] = [
       const method = match[1].toUpperCase();
       const routePath = match[2];
       const line = content.substring(0, match.index).split('\n').length;
+      const snippet = extractNearbySnippet(content, match.index || 0, 8);
+      const validations = extractValidationSnippets(snippet);
       return [{
         method,
         path: routePath,
         file: filePath,
-        line
+        line,
+        sourceSnippet: snippet,
+        validationSnippets: validations,
       }];
     }
   },
@@ -67,17 +79,21 @@ const FRAMEWORK_PATTERNS: FrameworkPattern[] = [
       const method = match[1].toUpperCase();
       const routePath = match[2] || '/';
       const line = content.substring(0, match.index).split('\n').length;
-      
+      const snippet = extractNearbySnippet(content, match.index || 0, 8);
+      const validations = extractValidationSnippets(snippet);
+
       // Look for [Route] attribute above
       const beforeMatch = content.substring(0, match.index!);
-      const routeMatch = beforeMatch.match(/\[Route\("([^"]+)"\)\]/);
+      const routeMatch = beforeMatch.match(/\[Route\("([^\"]+)"\)\]/);
       const basePath = routeMatch ? routeMatch[1] : '';
-      
+
       return [{
         method,
         path: basePath + routePath,
         file: filePath,
-        line
+        line,
+        sourceSnippet: snippet,
+        validationSnippets: validations,
       }];
     }
   },
@@ -112,7 +128,9 @@ const FRAMEWORK_PATTERNS: FrameworkPattern[] = [
     methodExtractor: (match, content, filePath) => {
       const routePath = match[1];
       const line = content.substring(0, match.index).split('\n').length;
-      
+      const snippet = extractNearbySnippet(content, match.index || 0, 8);
+      const validations = extractValidationSnippets(snippet);
+
       // Try to determine method from context
       const beforeMatch = content.substring(Math.max(0, match.index! - 50), match.index!);
       let method = 'GET'; // default
@@ -131,11 +149,54 @@ const FRAMEWORK_PATTERNS: FrameworkPattern[] = [
         method,
         path: routePath,
         file: filePath,
-        line
+        line,
+        sourceSnippet: snippet,
+        validationSnippets: validations,
       }];
     }
   }
 ];
+
+/**
+ * Extract a nearby snippet of source code around an index (number of lines)
+ */
+function extractNearbySnippet(content: string, index: number, contextLines = 8): string {
+  const lines = content.split('\n');
+  // Find line number for index
+  let charCount = 0;
+  let lineNumber = 0;
+  for (let i = 0; i < lines.length; i++) {
+    charCount += lines[i].length + 1; // +1 for newline
+    if (charCount >= index) {
+      lineNumber = i;
+      break;
+    }
+  }
+
+  const start = Math.max(0, lineNumber - contextLines);
+  const end = Math.min(lines.length - 1, lineNumber + contextLines);
+  return lines.slice(start, end + 1).join('\n');
+}
+
+/**
+ * Very small heuristic scan to pick out validation-like snippets from a source snippet.
+ * Keep this lightweight: just return lines that contain common validation keywords.
+ */
+function extractValidationSnippets(snippet: string): string[] {
+  const keywords = ['joi', 'validate(', 'schema', 'pydantic', 'marshmallow', 'zod', 'isEmail', 'IsEmail', '@IsEmail', 'bodyParser', 'express-validator', 'Joi.object', 'check(', 'tryParse', 'parse_obj'];
+  const lines = snippet.split('\n');
+  const found: string[] = [];
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    for (const kw of keywords) {
+      if (lower.includes(kw.toLowerCase())) {
+        found.push(line.trim());
+        break;
+      }
+    }
+  }
+  return found.slice(0, 10);
+}
 
 async function findFiles(dir: string, patterns: string[]): Promise<string[]> {
   const files: string[] = [];

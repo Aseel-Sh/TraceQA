@@ -1022,6 +1022,12 @@ export interface GeneratedHTTPTest {
   status: 'ready' | 'uncertain' | 'manual';
   uncertainReason?: string | null;
   steps: HTTPTestStep[];
+  /** Optional human-readable reasoning for why the test maps to the criterion */
+  reasoning?: string;
+  /** Confidence score (0.0 - 1.0) produced by IBM or assessment */
+  confidence?: number;
+  /** Execution mode suggested: automated|manual|uncertain */
+  executionMode?: 'automated' | 'manual' | 'uncertain';
 }
 
 /**
@@ -1106,6 +1112,10 @@ export interface DiscoveredRoute {
   description?: string;
   handler?: string;
   middleware?: string[];
+  /** Optional nearby source snippet to aid inference */
+  sourceSnippet?: string;
+  /** Optional validation/schema snippets discovered near the handler */
+  validationSnippets?: string[];
 }
 
 /**

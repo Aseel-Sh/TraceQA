@@ -31,6 +31,7 @@ import {
   type BodyGenerationResult,
   type TestDataContext,
 } from '../validation/body-generator.js';
+import { assessTestDataConfidence } from '../validation/test-data-inference.js';
 import { logger } from '../utils/logger.js';
 import { safeExtractJSON } from '../utils/json-extractor.js';
 import { writeFileSync, mkdirSync } from 'fs';
@@ -520,6 +521,7 @@ async function generateTestsFromTask(
         task,
         acceptanceCriterion,
         discoveredRoutes,
+        config,
         projectContext,
         watsonxClient
       );
@@ -559,6 +561,7 @@ async function generateTestsWithIBM(
   task: QATask,
   acceptanceCriterion: AcceptanceCriterion,
   discoveredRoutes: DiscoveredRoute[],
+  config: TraceQAConfig,
   projectContext: ProjectContext,
   watsonxClient: WatsonxClient
 ): Promise<GeneratedHTTPTest[] | null> {
@@ -604,6 +607,25 @@ async function generateTestsWithIBM(
       );
 
       if (normalized) {
+        // Assess generated data confidence using OpenAPI, route snippets, and config
+        try {
+          const firstStep = normalized.steps && normalized.steps.length > 0 ? normalized.steps[0] : null;
+          if (firstStep) {
+            const route = firstStep && discoveredRoutes.find(r => r.path && pathMatchesDiscoveredRoute(r.path, new URL(firstStep.url).pathname) && r.method.toUpperCase() === firstStep.method.toUpperCase()) || null;
+            const assessment = assessTestDataConfidence(firstStep.body, firstStep.method, route, projectContext.openApiSpec, config);
+            if (assessment.confidence < 0.6) {
+              normalized.status = 'uncertain';
+              normalized.uncertainReason = `Low confidence in generated request data: ${assessment.reasons.join('; ')}`;
+              normalized.executionMode = 'uncertain';
+            }
+          }
+        } catch (e) {
+          // If anything fails during assessment, mark uncertain conservatively
+          normalized.status = 'uncertain';
+          normalized.uncertainReason = 'Failed to assess test data confidence';
+          normalized.executionMode = 'uncertain';
+        }
+
         normalizedTests.push(normalized);
       }
     }
@@ -634,7 +656,12 @@ function buildHTTPTestPrompt(
   const routesInfo = discoveredRoutes.length > 0
     ? discoveredRoutes.map(route => {
         const fileInfo = (route as DiscoveredRoute & { file?: string }).file ? ` [${(route as DiscoveredRoute & { file?: string }).file}]` : '';
-        return `- ${route.method.toUpperCase()} ${route.path}${fileInfo}`;
+        const snippetRaw = (route as any)?.sourceSnippet;
+        const snippetInfo = snippetRaw ? `\n  Source snippet:\n${String(snippetRaw).split('\n').slice(0,8).join('\n')}` : '';
+        const validationInfo = (route as DiscoveredRoute & { validationSnippets?: string[] }).validationSnippets && (route as DiscoveredRoute & { validationSnippets?: string[] }).validationSnippets!.length > 0
+          ? `\n  Validation hints: ${(route as DiscoveredRoute & { validationSnippets?: string[] }).validationSnippets!.slice(0,5).join(' | ')}`
+          : '';
+        return `- ${route.method.toUpperCase()} ${route.path}${fileInfo}${validationInfo}${snippetInfo}`;
       }).join('\n')
     : 'No discovered routes were found.';
 
@@ -655,8 +682,17 @@ ${acceptanceCriterion.id}: ${acceptanceCriterion.description}
 Task:
 ${task.taskId}: ${task.title}
 
-Discovered routes:
+Discovered routes (include nearby source/validation hints where available):
 ${routesInfo}
+
+When constructing request bodies, prefer the following sources in priority order:
+1) OpenAPI requestBody schema and examples (if provided in the project)
+2) Validation or schema snippets found near the route handler (provided above)
+3) Config-provided sample data
+4) IBM reasoning using the provided acceptance criterion and the route snippets
+5) Generic placeholders only as last-resort low-confidence fallback
+
+When you produce bodies, include a short 'confidence' numeric value (0.0 - 1.0) in the test metadata and explain which source you used.
 
 Required JSON shape:
 {
