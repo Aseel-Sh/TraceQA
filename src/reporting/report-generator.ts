@@ -11,9 +11,6 @@ import {
   GeneratedHTTPTestSuite,
   HTTPTestResult,
   AcceptanceCriterion,
-  QATask,
-  GeneratedHTTPTest,
-  HTTPStepResult
 } from '../types/index.js';
 import { logger, formatDuration } from '../utils/logger.js';
 
@@ -387,8 +384,8 @@ export class ReportGenerator {
    */
   private assessMergeReadiness(
     summary: ReportSummary,
-    traceMatrix: TraceMatrixEntry[],
-    testResults: HTTPTestResult[]
+    _traceMatrix: TraceMatrixEntry[],
+    _testResults: HTTPTestResult[]
   ): {
     mergeReadiness: 'ready' | 'not_ready' | 'uncertain';
     riskLevel: 'low' | 'medium' | 'high';
@@ -604,7 +601,7 @@ export class ReportGenerator {
             manual: '👤'
           }[result.classification] || '?';
 
-          md += `- ${statusIcon} ${result.testId}: ${result.status} (${classIcon} ${result.classification}) - ${result.duration}ms\n`;
+          md += `- ${statusIcon} ${result.testId}: ${result.status} (${classIcon} ${result.classification}) - ${formatDuration(result.duration)}\n`;
           md += `  - Executor: ${result.executor}\n`;
         });
         md += `\n`;
@@ -688,7 +685,7 @@ export class ReportGenerator {
     md += `**Status:** ${result.status}\n`;
     md += `**Classification:** ${result.classification}\n`;
     md += `**Executor:** ${result.executor}\n`;
-    md += `**Duration:** ${result.duration}ms\n\n`;
+    md += `**Duration:** ${formatDuration(result.duration)}\n\n`;
 
     if (result.stepResults.length > 0) {
       md += `**Steps:**\n`;

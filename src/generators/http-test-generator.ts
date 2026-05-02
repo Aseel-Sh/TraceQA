@@ -24,7 +24,6 @@ import {
   validateAndNormalizeHTTPStep,
   detectMultiStepRequirement,
   type RouteMatchResult,
-  type ValidationResult,
 } from '../validation/route-matcher.js';
 import {
   generateRequestBody,
@@ -33,7 +32,7 @@ import {
   type TestDataContext,
 } from '../validation/body-generator.js';
 import { logger } from '../utils/logger.js';
-import { extractJSON, safeExtractJSON } from '../utils/json-extractor.js';
+import { safeExtractJSON } from '../utils/json-extractor.js';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
@@ -52,7 +51,323 @@ export interface HTTPTestGenerationResult {
  */
 export interface ProjectContext {
   baseUrl: string;
+  projectType?: string;
+  language?: string;
   openApiSpec?: any;
+  routeSources?: string[];
+}
+
+interface IBMGeneratedHTTPTestResponse {
+  tests: Array<{
+    id?: string;
+    acceptanceCriterionId?: string;
+    title?: string;
+    reasoning?: string;
+    confidence?: number;
+    executionMode?: 'automated' | 'manual' | 'uncertain';
+    uncertainReason?: string | null;
+    steps?: Array<{
+      stepId?: string;
+      description?: string;
+      method?: string;
+      path?: string;
+      url?: unknown;
+      headers?: Record<string, string>;
+      body?: unknown;
+      expectedStatus?: unknown;
+      acceptableStatuses?: unknown;
+      expectedBodyContains?: unknown;
+    }>;
+  }>;
+}
+
+interface RouteMatchHint {
+  matched: boolean;
+  route?: DiscoveredRoute;
+}
+
+function isAllowedMethod(method: unknown): method is HTTPTestStep['method'] {
+  return typeof method === 'string' && ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase());
+}
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/$/, '');
+}
+
+function normalizeStepUrl(url: string, baseUrl: string): string {
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return url;
+  }
+
+  const normalizedBase = normalizeBaseUrl(baseUrl);
+  const normalizedPath = url.startsWith('/') ? url : `/${url}`;
+  return `${normalizedBase}${normalizedPath}`;
+}
+
+function pathMatchesDiscoveredRoute(routePath: string, requestPath: string): boolean {
+  if (routePath === requestPath) {
+    return true;
+  }
+
+  const routeParts = routePath.split('/');
+  const requestParts = requestPath.split('/');
+  if (routeParts.length !== requestParts.length) {
+    return false;
+  }
+
+  for (let index = 0; index < routeParts.length; index++) {
+    const routePart = routeParts[index];
+    const requestPart = requestParts[index];
+
+    if (routePart.startsWith(':') || routePart.startsWith('{')) {
+      continue;
+    }
+
+    if (routePart !== requestPart) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function findRouteHint(stepPath: string, method: string, discoveredRoutes: DiscoveredRoute[]): RouteMatchHint {
+  const normalizedStepPath = stepPath.split('?')[0];
+  const route = discoveredRoutes.find(candidate =>
+    candidate.method.toUpperCase() === method.toUpperCase() &&
+    pathMatchesDiscoveredRoute(candidate.path, normalizedStepPath)
+  );
+
+  return {
+    matched: !!route,
+    route,
+  };
+}
+
+function buildOpenApiSummary(openApiSpec: any): string {
+  if (!openApiSpec || typeof openApiSpec !== 'object') {
+    return 'None';
+  }
+
+  const paths = openApiSpec.paths && typeof openApiSpec.paths === 'object' ? openApiSpec.paths : {};
+  const routeCount = Object.keys(paths).length;
+  const sample = Object.entries(paths).slice(0, 10).map(([routePath, methods]) => {
+    const methodList = Object.keys(methods as Record<string, unknown>).join(', ');
+    return `- ${routePath}: ${methodList}`;
+  });
+
+  return [`Routes: ${routeCount}`, ...sample].join('\n');
+}
+
+function inferExpectedStatuses(method: string): number[] {
+  switch (method.toUpperCase()) {
+    case 'GET':
+      return [200];
+    case 'POST':
+      return [200, 201];
+    case 'PUT':
+    case 'PATCH':
+      return [200, 204];
+    case 'DELETE':
+      return [200, 204];
+    default:
+      return [200];
+  }
+}
+
+function createUncertainTest(options: {
+  task: QATask;
+  acceptanceCriterion: AcceptanceCriterion;
+  reason: string;
+}): GeneratedHTTPTest {
+  return {
+    id: `TC-${options.task.taskId.replace('QA-', '')}`,
+    qaTaskId: options.task.taskId,
+    acceptanceCriterionId: options.acceptanceCriterion.id,
+    title: options.task.title,
+    type: 'api',
+    status: 'uncertain',
+    uncertainReason: options.reason,
+    steps: [],
+  };
+}
+
+function normalizeGeneratedTest(
+  rawTest: any,
+  task: QATask,
+  acceptanceCriterion: AcceptanceCriterion,
+  discoveredRoutes: DiscoveredRoute[],
+  baseUrl: string
+): GeneratedHTTPTest | null {
+  const warnings: string[] = [];
+
+  if (!rawTest || typeof rawTest !== 'object') {
+    return null;
+  }
+
+  const acceptanceCriterionId = typeof rawTest.acceptanceCriterionId === 'string'
+    ? rawTest.acceptanceCriterionId
+    : acceptanceCriterion.id;
+
+  if (acceptanceCriterionId !== acceptanceCriterion.id) {
+    warnings.push(`Acceptance criterion mismatch: ${acceptanceCriterionId} != ${acceptanceCriterion.id}`);
+  }
+
+  const confidence = typeof rawTest.confidence === 'number' ? rawTest.confidence : 0;
+  const executionMode = rawTest.executionMode;
+  const uncertainReason = typeof rawTest.uncertainReason === 'string' ? rawTest.uncertainReason : null;
+  const title = typeof rawTest.title === 'string' && rawTest.title.trim().length > 0
+    ? rawTest.title.trim()
+    : task.title;
+  const reasoning = typeof rawTest.reasoning === 'string' ? rawTest.reasoning : task.reasoning;
+
+  if (!Array.isArray(rawTest.steps) || rawTest.steps.length === 0) {
+    return {
+      id: typeof rawTest.id === 'string' && rawTest.id.trim().length > 0 ? rawTest.id : `TC-${task.taskId.replace('QA-', '')}`,
+      qaTaskId: task.taskId,
+      acceptanceCriterionId,
+      title,
+      type: 'api',
+      status: 'uncertain',
+      uncertainReason: uncertainReason || 'IBM response did not contain executable steps.',
+      steps: [],
+      reasoning,
+      confidence,
+      executionMode: 'uncertain',
+    } as GeneratedHTTPTest;
+  }
+
+  if (discoveredRoutes.length === 0) {
+    return createUncertainTest({
+      task,
+      acceptanceCriterion,
+      reason: 'No discovered routes were available to validate this test.',
+    });
+  }
+
+  const normalizedSteps: HTTPTestStep[] = [];
+
+  for (let index = 0; index < rawTest.steps.length; index++) {
+    const rawStep = rawTest.steps[index];
+    const stepNumber = index + 1;
+
+    if (!rawStep || typeof rawStep !== 'object') {
+      return null;
+    }
+
+    if (!isAllowedMethod(rawStep.method)) {
+      return createUncertainTest({
+        task,
+        acceptanceCriterion,
+        reason: `Step ${stepNumber} has invalid HTTP method.`,
+      });
+    }
+
+    const method = rawStep.method.toUpperCase() as HTTPTestStep['method'];
+
+    let stepPath = '';
+    if (typeof rawStep.path === 'string' && rawStep.path.trim().length > 0) {
+      stepPath = rawStep.path.trim();
+    } else if (typeof rawStep.url === 'string' && rawStep.url.trim().length > 0) {
+      const urlValue = rawStep.url.trim();
+      if (urlValue.startsWith('{') || urlValue.startsWith('[')) {
+        return createUncertainTest({
+          task,
+          acceptanceCriterion,
+          reason: `Step ${stepNumber} has an invalid URL object/stringified object.`,
+        });
+      }
+
+      if (!(urlValue.startsWith('http://') || urlValue.startsWith('https://') || urlValue.startsWith('/'))) {
+        return createUncertainTest({
+          task,
+          acceptanceCriterion,
+          reason: `Step ${stepNumber} has an invalid URL format.`,
+        });
+      }
+
+      stepPath = urlValue.startsWith('http://') || urlValue.startsWith('https://')
+        ? new URL(urlValue).pathname
+        : urlValue;
+    } else {
+      return createUncertainTest({
+        task,
+        acceptanceCriterion,
+        reason: `Step ${stepNumber} is missing a path or URL.`,
+      });
+    }
+
+    const routeHint = findRouteHint(stepPath, method, discoveredRoutes);
+    if (discoveredRoutes.length > 0 && !routeHint.matched) {
+      return createUncertainTest({
+        task,
+        acceptanceCriterion,
+        reason: `Step ${stepNumber} does not match any discovered route.`,
+      });
+    }
+
+    const body = rawStep.body === undefined || rawStep.body === null ? null : rawStep.body;
+    if (['POST', 'PUT', 'PATCH'].includes(method) && body !== null && (typeof body !== 'object' || Array.isArray(body))) {
+      return createUncertainTest({
+        task,
+        acceptanceCriterion,
+        reason: `Step ${stepNumber} must use an object request body.`,
+      });
+    }
+
+    const expectedStatus = typeof rawStep.expectedStatus === 'number' ? rawStep.expectedStatus : undefined;
+    if (typeof expectedStatus !== 'number') {
+      return createUncertainTest({
+        task,
+        acceptanceCriterion,
+        reason: `Step ${stepNumber} is missing a numeric expectedStatus.`,
+      });
+    }
+
+    const acceptableStatuses = Array.isArray(rawStep.acceptableStatuses)
+      ? rawStep.acceptableStatuses.filter((value: unknown) => typeof value === 'number') as number[]
+      : inferExpectedStatuses(method);
+
+    const url = typeof rawStep.url === 'string' && (rawStep.url.startsWith('http://') || rawStep.url.startsWith('https://'))
+      ? rawStep.url
+      : normalizeStepUrl(stepPath, baseUrl);
+
+    normalizedSteps.push({
+      stepId: typeof rawStep.stepId === 'string' && rawStep.stepId.trim().length > 0
+        ? rawStep.stepId
+        : `${task.taskId}-S${stepNumber}`,
+      description: typeof rawStep.description === 'string' && rawStep.description.trim().length > 0
+        ? rawStep.description
+        : `${task.title} step ${stepNumber}`,
+      method,
+      url,
+      headers: rawStep.headers && typeof rawStep.headers === 'object'
+        ? rawStep.headers
+        : { 'Content-Type': 'application/json' },
+      body: body as Record<string, any> | null,
+      expectedStatus,
+      acceptableStatuses,
+      expectedBodyContains: Array.isArray(rawStep.expectedBodyContains)
+        ? rawStep.expectedBodyContains.filter((value: unknown) => typeof value === 'string')
+        : [],
+    });
+  }
+
+  const isAutomated = executionMode === 'automated' && confidence >= 0.7 && warnings.length === 0;
+
+  return {
+    id: typeof rawTest.id === 'string' && rawTest.id.trim().length > 0 ? rawTest.id : `TC-${task.taskId.replace('QA-', '')}`,
+    qaTaskId: task.taskId,
+    acceptanceCriterionId,
+    title,
+    type: 'api',
+    status: isAutomated ? 'ready' : 'uncertain',
+    uncertainReason: isAutomated ? null : (uncertainReason || 'IBM output did not meet executable-test validation requirements.'),
+    steps: normalizedSteps,
+    reasoning,
+    confidence,
+    executionMode: executionMode || 'uncertain',
+  } as GeneratedHTTPTest;
 }
 
 /**
@@ -130,7 +445,7 @@ export async function generateHTTPTests(
     }
 
     try {
-      const test = await generateTestFromTask(
+      const generatedTests = await generateTestsFromTask(
         task,
         acceptanceCriterion,
         discoveredRoutes,
@@ -139,16 +454,13 @@ export async function generateHTTPTests(
         watsonxClient
       );
 
-      tests.push(test);
+      tests.push(...generatedTests);
 
-      // Track if IBM was used
-      if (test.steps.some(step => step.description.includes('IBM'))) {
+      if (generatedTests.some(test => (test as any).reasoning?.toLowerCase().includes('ibm'))) {
         ibmUsed = true;
       }
 
-      // Track if normalization was applied
-      if (test.uncertainReason?.includes('normalized') || 
-          test.uncertainReason?.includes('inferred')) {
+      if (generatedTests.some(test => test.status !== 'ready')) {
         normalizationApplied = true;
       }
     } catch (error) {
@@ -190,109 +502,47 @@ export async function generateHTTPTests(
  * @param watsonxClient - Optional IBM watsonx.ai client
  * @returns Generated HTTP test
  */
-async function generateTestFromTask(
+async function generateTestsFromTask(
   task: QATask,
   acceptanceCriterion: AcceptanceCriterion,
   discoveredRoutes: DiscoveredRoute[],
   config: TraceQAConfig,
   projectContext: ProjectContext,
   watsonxClient: WatsonxClient | null
-): Promise<GeneratedHTTPTest> {
+): Promise<GeneratedHTTPTest[]> {
   logger.debug(`Generating test for task ${task.taskId}: ${task.title}`);
 
-  // Match route to task
-  const routeMatch = matchRouteToTask(
-    task,
-    acceptanceCriterion,
-    discoveredRoutes,
-    projectContext.openApiSpec
-  );
+  let generatedTests: GeneratedHTTPTest[] = [];
 
-  // Try IBM generation first if available
-  let ibmSteps: any[] | null = null;
-  if (watsonxClient && routeMatch.matched) {
+  if (watsonxClient) {
     try {
-      ibmSteps = await generateTestStepsWithIBM(
+      const ibmTests = await generateTestsWithIBM(
         task,
         acceptanceCriterion,
-        routeMatch,
-        projectContext.baseUrl,
+        discoveredRoutes,
+        projectContext,
         watsonxClient
       );
+
+      if (ibmTests) {
+        generatedTests = ibmTests;
+      }
     } catch (error) {
       logger.debug(`IBM generation failed for task ${task.taskId}, using fallback`);
     }
   }
 
-  // Validate and normalize IBM steps or generate fallback
-  let steps: HTTPTestStep[];
-  let bodyGenerationResults: BodyGenerationResult[] = [];
-  let testWarnings: string[] = [];
-
-  if (ibmSteps && ibmSteps.length > 0) {
-    const validation = validateAndNormalizeTestSteps(
-      ibmSteps,
-      task,
-      acceptanceCriterion,
-      discoveredRoutes,
-      config,
-      projectContext.baseUrl
-    );
-
-    steps = validation.normalizedSteps;
-    testWarnings = [...validation.warnings, ...validation.errors];
-    
-    // Generate bodies for steps that need them
-    for (const step of steps) {
-      if (['POST', 'PUT', 'PATCH'].includes(step.method) && !step.body) {
-        const bodyResult = generateRequestBody(
-          step.method,
-          routeMatch.route,
-          task,
-          acceptanceCriterion,
-          config,
-          projectContext.openApiSpec
-        );
-        step.body = bodyResult.body;
-        bodyGenerationResults.push(bodyResult);
-        testWarnings.push(...bodyResult.warnings);
-      }
-    }
-  } else {
-    // Fallback generation
-    const fallbackTest = generateFallbackTest(
-      task,
-      acceptanceCriterion,
-      discoveredRoutes,
-      config,
-      projectContext.baseUrl
-    );
-    
-    steps = fallbackTest.steps;
-    testWarnings.push('Generated using fallback logic - IBM unavailable or failed');
+  if (generatedTests.length > 0) {
+    return generatedTests;
   }
 
-  // Determine test status
-  const statusResult = determineTestStatus(
+  return [generateFallbackTest(
     task,
-    steps,
-    routeMatch,
-    bodyGenerationResults
-  );
-
-  // Build the test
-  const test: GeneratedHTTPTest = {
-    id: `TC-${task.taskId.replace('QA-', '')}`,
-    qaTaskId: task.taskId,
-    acceptanceCriterionId: task.acceptanceCriterionId,
-    title: task.title,
-    type: task.type === 'uncertain' ? 'api' : task.type,
-    steps,
-    status: statusResult.status,
-    uncertainReason: statusResult.uncertainReason || undefined,
-  };
-
-  return test;
+    acceptanceCriterion,
+    discoveredRoutes,
+    config,
+    projectContext.baseUrl
+  )];
 }
 
 /**
@@ -305,18 +555,18 @@ async function generateTestFromTask(
  * @param watsonxClient - IBM watsonx.ai client
  * @returns Array of test steps or null if generation failed
  */
-async function generateTestStepsWithIBM(
+async function generateTestsWithIBM(
   task: QATask,
   acceptanceCriterion: AcceptanceCriterion,
-  routeMatch: RouteMatchResult,
-  baseUrl: string,
+  discoveredRoutes: DiscoveredRoute[],
+  projectContext: ProjectContext,
   watsonxClient: WatsonxClient
-): Promise<any[] | null> {
+): Promise<GeneratedHTTPTest[] | null> {
   const prompt = buildHTTPTestPrompt(
     task,
     acceptanceCriterion,
-    routeMatch.route,
-    baseUrl
+    discoveredRoutes,
+    projectContext
   );
 
   logger.debug('Requesting test steps from IBM watsonx.ai...');
@@ -330,23 +580,36 @@ async function generateTestStepsWithIBM(
     // Save raw response for debugging
     saveRawIBMResponse(response, task.taskId);
 
-    // Extract JSON from response
     const extracted = safeExtractJSON(response);
-    
+
     if (!extracted.success || !extracted.data) {
       logger.warn(`Failed to extract JSON from IBM response for task ${task.taskId}`);
       return null;
     }
 
-    // Validate structure
-    const data = extracted.data;
-    if (!data.steps || !Array.isArray(data.steps)) {
-      logger.warn(`IBM response missing 'steps' array for task ${task.taskId}`);
+    const data = extracted.data as IBMGeneratedHTTPTestResponse;
+    if (!data.tests || !Array.isArray(data.tests)) {
+      logger.warn(`IBM response missing 'tests' array for task ${task.taskId}`);
       return null;
     }
 
-    logger.debug(`IBM generated ${data.steps.length} test steps`);
-    return data.steps;
+    const normalizedTests: GeneratedHTTPTest[] = [];
+    for (const rawTest of data.tests) {
+      const normalized = normalizeGeneratedTest(
+        rawTest,
+        task,
+        acceptanceCriterion,
+        discoveredRoutes,
+        projectContext.baseUrl
+      );
+
+      if (normalized) {
+        normalizedTests.push(normalized);
+      }
+    }
+
+    logger.debug(`IBM generated ${normalizedTests.length} executable test(s)`);
+    return normalizedTests.length > 0 ? normalizedTests : null;
   } catch (error) {
     logger.error(`IBM test generation failed for task ${task.taskId}:`, error);
     return null;
@@ -365,47 +628,75 @@ async function generateTestStepsWithIBM(
 function buildHTTPTestPrompt(
   task: QATask,
   acceptanceCriterion: AcceptanceCriterion,
-  matchedRoute: DiscoveredRoute | null,
-  baseUrl: string
+  discoveredRoutes: DiscoveredRoute[],
+  projectContext: ProjectContext
 ): string {
-  const routeInfo = matchedRoute
-    ? `Matched Route: ${matchedRoute.method} ${matchedRoute.path}`
-    : 'No specific route matched - infer from task description';
+  const routesInfo = discoveredRoutes.length > 0
+    ? discoveredRoutes.map(route => {
+        const fileInfo = (route as DiscoveredRoute & { file?: string }).file ? ` [${(route as DiscoveredRoute & { file?: string }).file}]` : '';
+        return `- ${route.method.toUpperCase()} ${route.path}${fileInfo}`;
+      }).join('\n')
+    : 'No discovered routes were found.';
 
-  return `Generate HTTP test steps for the following QA task.
+  const openApiInfo = buildOpenApiSummary(projectContext.openApiSpec);
 
-Task: ${task.title}
-Acceptance Criterion: ${acceptanceCriterion.description}
-Expected Result: ${task.expectedResult}
-${routeInfo}
-Base URL: ${baseUrl}
+  return `You are generating executable HTTP tests from acceptance criteria.
 
-Generate a JSON object with the following structure:
+Return STRICT JSON ONLY. Do not return markdown, prose, or code fences.
+
+Project type: ${projectContext.projectType || 'unknown'}
+Language: ${projectContext.language || 'unknown'}
+Base URL: ${projectContext.baseUrl}
+OpenAPI summary: ${openApiInfo}
+
+Acceptance criterion:
+${acceptanceCriterion.id}: ${acceptanceCriterion.description}
+
+Task:
+${task.taskId}: ${task.title}
+
+Discovered routes:
+${routesInfo}
+
+Required JSON shape:
 {
-  "steps": [
+  "tests": [
     {
-      "description": "Step description",
-      "method": "HTTP method (GET, POST, PUT, PATCH, DELETE)",
-      "url": "Relative URL path (e.g., /api/users)",
-      "headers": { "Content-Type": "application/json" },
-      "body": { "field": "value" } or null,
-      "expectedStatus": 200,
-      "expectedBodyContains": ["expected", "values"] or null
+      "id": "TC-001",
+      "acceptanceCriterionId": "AC-1",
+      "title": "Human readable title",
+      "reasoning": "Why this test maps to the acceptance criterion.",
+      "confidence": 0.92,
+      "executionMode": "automated",
+      "steps": [
+        {
+          "stepId": "TC-001-S1",
+          "method": "POST",
+          "path": "/api/example",
+          "url": "${projectContext.baseUrl}/api/example",
+          "headers": { "Content-Type": "application/json" },
+          "body": { "example": "value" },
+          "expectedStatus": 201,
+          "acceptableStatuses": [200, 201],
+          "expectedBodyContains": []
+        }
+      ]
     }
-  ],
-  "reasoning": "Why these steps test the acceptance criterion"
+  ]
 }
 
-Requirements:
-- Use the matched route if provided
-- Include setup steps if needed (e.g., create before update/delete)
-- For duplicate/conflict tests, create resource first, then attempt duplicate
-- Use realistic test data with unique identifiers
-- Set appropriate expected status codes
-- Include expected response patterns when relevant
-- Keep URLs as relative paths (e.g., /api/users, not full URLs)
+Rules:
+- Use only discovered routes or a clear UNCERTAIN response.
+- Do not invent fake endpoints.
+- If you cannot safely map the criterion to an executable HTTP test, return:
+  { "tests": [{ "id": "TC-001", "acceptanceCriterionId": "${acceptanceCriterion.id}", "title": "${task.title}", "reasoning": "No discovered route appears to handle this behavior.", "confidence": 0.0, "executionMode": "uncertain", "uncertainReason": "No discovered route appears to handle this behavior.", "steps": [] }] }
+- Every automated test must use discovered route paths and absolute or baseUrl-derived URLs.
+- Use JSON bodies for POST, PUT, and PATCH when needed.
+- If confidence is low, set executionMode to uncertain.
+- Do not put objects in url.
+- Keep paths aligned with discovered routes.
 
-Return ONLY the JSON object, no additional text.`;
+Return ONLY valid JSON.`;
 }
 
 /**
@@ -419,12 +710,12 @@ Return ONLY the JSON object, no additional text.`;
  * @param baseUrl - Base URL
  * @returns Validation result with normalized steps
  */
-function validateAndNormalizeTestSteps(
+export function validateAndNormalizeTestSteps(
   steps: any[],
   task: QATask,
-  acceptanceCriterion: AcceptanceCriterion,
+  _acceptanceCriterion: AcceptanceCriterion,
   discoveredRoutes: DiscoveredRoute[],
-  config: TraceQAConfig,
+  _config: TraceQAConfig,
   baseUrl: string
 ): {
   normalizedSteps: HTTPTestStep[];
@@ -444,8 +735,8 @@ function validateAndNormalizeTestSteps(
       errors.push(`Step ${stepNum}: Missing method`);
       continue;
     }
-    if (!step.url) {
-      errors.push(`Step ${stepNum}: Missing URL`);
+    if (!step.url && !step.path) {
+      errors.push(`Step ${stepNum}: Missing URL/path`);
       continue;
     }
 
@@ -454,7 +745,7 @@ function validateAndNormalizeTestSteps(
       stepId: `${task.taskId}-S${stepNum}`,
       description: step.description || `Step ${stepNum}`,
       method: step.method,
-      url: step.url,
+      url: typeof step.url === 'string' ? step.url : (typeof step.path === 'string' ? step.path : ''),
       headers: step.headers || { 'Content-Type': 'application/json' },
       body: step.body || null,
       expectedStatus: step.expectedStatus || 200,
@@ -812,17 +1103,16 @@ function generateFallbackTest(
       }];
     }
   } else {
-    // No route matched - create minimal test
-    steps = [{
-      stepId: `${task.taskId}-S1`,
-      description: task.title,
-      method: 'GET',
-      url: `${baseUrl}/api/unknown`,
-      headers: { 'Content-Type': 'application/json' },
-      body: null,
-      expectedStatus: 200,
-      acceptableStatuses: [200],
-    }];
+    return {
+      id: `TC-${task.taskId.replace('QA-', '')}`,
+      qaTaskId: task.taskId,
+      acceptanceCriterionId: task.acceptanceCriterionId,
+      title: task.title,
+      type: task.type === 'uncertain' ? 'api' : task.type,
+      steps: [],
+      status: 'uncertain',
+      uncertainReason: 'No discovered route appears to handle this behavior.',
+    };
   }
 
   // Determine status

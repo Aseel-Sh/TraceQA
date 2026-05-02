@@ -11,9 +11,7 @@ import { TestRunner } from './test-runner.js';
 import { APITester } from './api-tester.js';
 import { WebTester } from './web-tester.js';
 import { TestNormalizer, NormalizedTest } from './test-normalizer.js';
-import { QATaskGenerator, HTTPTestGenerator } from '../generators/qa-task-generator.js';
 import {
-  writeAllGeneratedArtifacts,
   writeQATaskPlan,
   writeGeneratedHTTPTests,
   writeGeneratedTestsMarkdown,
@@ -45,8 +43,6 @@ import {
   AssertionType,
   APIAssertion,
   DiffAnalysis,
-  QATaskPlan,
-  GeneratedHTTPTestSuite,
   HTTPTestResult,
   TraceQAConfig
 } from '../types/index.js';
@@ -218,14 +214,15 @@ export class TestCoordinator {
     generatedDir?: string;
     proofDir?: string;
     debugDir?: string;
+    projectConfig?: any;
   }): Promise<void> {
     const {
       acceptancePath,
       baseUrl,
-      outputDir = 'traceqa-proof',
       generatedDir = 'traceqa-generated',
       proofDir = 'traceqa-proof',
-      debugDir = 'traceqa-debug'
+      debugDir = 'traceqa-debug',
+      projectConfig = {}
     } = options;
 
     const warnings: string[] = [];
@@ -234,7 +231,6 @@ export class TestCoordinator {
     try {
       logger.info('Starting TraceQA test execution with new architecture...');
       logger.newLine();
-
       // Phase 1: Parse acceptance criteria
       logger.section('Phase 1: Parsing acceptance criteria');
       const parsed = await parseAcceptanceCriteriaFromFile(acceptancePath);
@@ -290,9 +286,16 @@ export class TestCoordinator {
         timeout: 30000,
       };
       
+      const openApiSpec = await this.loadOpenApiSpec(projectConfig.openapi, acceptancePath);
+
       const projectContext = {
-        projectName: 'TraceQA Project',
+        projectName: projectConfig.projectName || 'TraceQA Project',
         baseUrl,
+        projectType: projectConfig.projectType,
+        language: projectConfig.language,
+        healthUrl: projectConfig.healthUrl,
+        openApiSpec,
+        routeSources: routes.map(route => route.file).filter((file): file is string => !!file),
       };
       
       const qaTaskPlanResult = await generateQATaskPlan(
@@ -527,6 +530,35 @@ export class TestCoordinator {
       }
       
       throw error;
+    }
+  }
+
+  private async loadOpenApiSpec(openapiPath: string | undefined, acceptancePath: string): Promise<any | undefined> {
+    if (!openapiPath) {
+      return undefined;
+    }
+
+    try {
+      const fs = await import('fs-extra');
+      const path = await import('path');
+      const yaml = await import('js-yaml');
+
+      const baseDir = path.dirname(acceptancePath);
+      const resolvedPath = path.isAbsolute(openapiPath) ? openapiPath : path.resolve(baseDir, openapiPath);
+
+      if (!(await fs.pathExists(resolvedPath))) {
+        return undefined;
+      }
+
+      const content = await fs.readFile(resolvedPath, 'utf-8');
+      if (resolvedPath.endsWith('.json')) {
+        return JSON.parse(content);
+      }
+
+      return yaml.load(content);
+    } catch (error) {
+      logger.debug('Failed to load OpenAPI spec', error);
+      return undefined;
     }
   }
 

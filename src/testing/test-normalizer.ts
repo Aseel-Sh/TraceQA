@@ -162,7 +162,7 @@ export class TestNormalizer {
   private inferExpectedStatusFromSemantics(
     method: string,
     testCase: any,
-    endpoint?: string
+    _endpoint?: string
   ): number | undefined {
     const methodUpper = method.toUpperCase();
     const description = `${testCase.name || ''} ${testCase.description || ''} ${testCase.expectedResult || ''}`.toLowerCase();
@@ -515,7 +515,7 @@ export class TestNormalizer {
    */
   private extractAndValidateURL(
     step: any,
-    testCase: TestCase,
+    _testCase: TestCase,
     context: TestContext,
     method: HTTPMethod
   ): {
@@ -541,6 +541,16 @@ export class TestNormalizer {
         isValid: false,
         errorType: 'generation_error',
         errorMessage: `TraceQA generation error: URL is an object (${JSON.stringify(step.target)}) instead of a string. This is a test generation issue, not an application bug.`
+      };
+    }
+
+    if (step.url && typeof step.url === 'object') {
+      logger.warn(`Invalid URL: step.url is an object, not a string`, step.url);
+      return {
+        url: undefined,
+        isValid: false,
+        errorType: 'generation_error',
+        errorMessage: `TraceQA generation error: URL is an object (${JSON.stringify(step.url)}) instead of a string. This is a test generation issue, not an application bug.`
       };
     }
 
@@ -571,14 +581,11 @@ export class TestNormalizer {
         };
       }
 
-      // Generate a default URL
-      url = this.generateDefaultURL(testCase, context);
-      
       return {
-        url,
+        url: undefined,
         isValid: false,
         errorType: 'uncertain',
-        errorMessage: `UNCERTAIN: No URL found in test case, using generated default: ${url}`
+        errorMessage: 'UNCERTAIN: Could not execute API test because no endpoint or base URL was available. Cannot safely infer a URL.'
       };
     }
 
@@ -719,46 +726,6 @@ export class TestNormalizer {
     }
 
     return true;
-  }
-
-  /**
-   * Generate a default URL when none is found (generic approach)
-   */
-  private generateDefaultURL(testCase: TestCase, context: TestContext): string {
-    const basePath = this.baseUrl ||
-                     (context.buildInfo.port ? `http://localhost:${context.buildInfo.port}` : 'http://localhost:3000');
-    
-    // Try to infer resource from test name (generic patterns)
-    const name = testCase.name.toLowerCase();
-    const description = testCase.description.toLowerCase();
-    const combined = `${name} ${description}`;
-    
-    // Extract potential resource names (plural nouns)
-    const resourcePatterns = [
-      /\b(users?|accounts?|profiles?)\b/,
-      /\b(orders?|purchases?|transactions?)\b/,
-      /\b(products?|items?|goods?)\b/,
-      /\b(posts?|articles?|blogs?)\b/,
-      /\b(comments?|reviews?|ratings?)\b/,
-      /\b(tasks?|todos?|activities?)\b/,
-      /\b(messages?|notifications?|alerts?)\b/,
-      /\b(files?|documents?|uploads?)\b/,
-      /\b(categories?|tags?|labels?)\b/,
-      /\b(settings?|configs?|preferences?)\b/
-    ];
-    
-    for (const pattern of resourcePatterns) {
-      const match = combined.match(pattern);
-      if (match) {
-        const resource = match[1];
-        // Pluralize if singular
-        const pluralResource = resource.endsWith('s') ? resource : `${resource}s`;
-        return `${basePath}/api/${pluralResource}`;
-      }
-    }
-
-    // Fallback to generic test endpoint
-    return `${basePath}/api/test`;
   }
 
   /**

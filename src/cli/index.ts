@@ -208,7 +208,7 @@ async function handleTestCommand(options: {
   let projectConfig: any = {};
 
   // If all options provided, skip interactive mode
-  if (options.repo && options.description) {
+  if (options.repo && (options.description || options.criteria)) {
     logger.debug('Using command-line options', options);
 
     // Validate repository path
@@ -241,13 +241,26 @@ async function handleTestCommand(options: {
     // Validate test type
     const testType = parseTestType(options.type || 'both');
 
+    const repoAcceptancePath = path.join(repoPath, 'acceptance.md');
+
     // Parse acceptance criteria from file if provided
     let acceptanceCriteria: string[] | undefined;
     if (options.criteria) {
       logger.newLine();
       logger.section('Parsing Acceptance Criteria');
       
-      const criteriaPath = path.resolve(options.criteria);
+      const criteriaCandidates = path.isAbsolute(options.criteria)
+        ? [options.criteria]
+        : [path.resolve(repoPath, options.criteria), path.resolve(process.cwd(), options.criteria)];
+
+      let criteriaPath = criteriaCandidates[0];
+      for (const candidate of criteriaCandidates) {
+        if (await fs.pathExists(candidate)) {
+          criteriaPath = candidate;
+          break;
+        }
+      }
+
       if (!await fs.pathExists(criteriaPath)) {
         throw new TraceQAError(
           `Acceptance criteria file does not exist: ${criteriaPath}`,
@@ -259,6 +272,14 @@ async function handleTestCommand(options: {
       acceptanceCriteria = parsed.criteria.map(c => `${c.id}: ${c.description}`);
       
       logger.success(`✓ Parsed ${parsed.criteria.length} acceptance criteria from ${path.basename(criteriaPath)}`);
+    } else if (await fs.pathExists(repoAcceptancePath)) {
+      logger.newLine();
+      logger.section('Parsing Acceptance Criteria');
+
+      const parsed = await parseAcceptanceCriteriaFromFile(repoAcceptancePath);
+      acceptanceCriteria = parsed.criteria.map(c => `${c.id}: ${c.description}`);
+
+      logger.success(`✓ Parsed ${parsed.criteria.length} acceptance criteria from ${path.basename(repoAcceptancePath)}`);
     } else if (options.description) {
       // Split multi-sentence descriptions into acceptance criteria
       // Split on period followed by space or newlines
@@ -282,7 +303,7 @@ async function handleTestCommand(options: {
         branch: options.branch || 'current'
       },
       testType,
-      description: options.description,
+      description: options.description || acceptanceCriteria?.join(' ') || 'Acceptance criteria provided via file',
       acceptanceCriteria,
       autoApprove: options.yes || false,
       outputDir: projectConfig.outputDir || options.outputDir,
@@ -759,7 +780,8 @@ async function executeTests(
       outputDir: proofDir,
       generatedDir,
       proofDir,
-      debugDir
+      debugDir,
+      projectConfig
     });
 
     // Clean up temporary file

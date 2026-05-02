@@ -7,6 +7,7 @@ import * as p from '@clack/prompts';
 import chalk from 'chalk';
 import { TestType, UserInput, RepositoryOption } from '../types/index.js';
 import { logger } from '../utils/logger.js';
+import { parseAcceptanceCriteriaFromFile } from '../parsers/acceptance-parser.js';
 import fs from 'fs-extra';
 import path from 'path';
 
@@ -202,7 +203,7 @@ export async function promptAcceptanceCriteria(): Promise<string | symbol> {
 /**
  * Prompt user to select test type
  */
-export async function promptTestType(): Promise<TestType | symbol> {
+export async function promptTestType(defaultValue: TestType = TestType.BOTH): Promise<TestType | symbol> {
   const testType = await p.select({
     message: 'What type of tests should I run?',
     options: [
@@ -222,7 +223,7 @@ export async function promptTestType(): Promise<TestType | symbol> {
         hint: 'Comprehensive testing (recommended)'
       }
     ],
-    initialValue: TestType.BOTH
+    initialValue: defaultValue
   });
 
   return testType as TestType | symbol;
@@ -291,22 +292,58 @@ export async function collectUserInput(): Promise<UserInput | null> {
     return null;
   }
 
-  // Step 2: Change description
-  const description = await promptChangeDescription();
-  if (p.isCancel(description)) {
-    displayOutro(false);
-    return null;
-  }
+  const repositoryPath = repository as string;
+  const acceptanceFilePath = path.join(repositoryPath, 'acceptance.md');
 
-  // Step 3: Acceptance criteria (optional)
-  const acceptanceCriteria = await promptAcceptanceCriteria();
-  if (p.isCancel(acceptanceCriteria)) {
-    displayOutro(false);
-    return null;
+  let description: string | symbol;
+  let acceptanceCriteria: string | symbol;
+
+  if (await fs.pathExists(acceptanceFilePath)) {
+    const useAcceptanceFile = await p.confirm({
+      message: 'Use acceptance.md from the repository?',
+      initialValue: true,
+    });
+
+    if (p.isCancel(useAcceptanceFile)) {
+      displayOutro(false);
+      return null;
+    }
+
+    if (useAcceptanceFile) {
+      const parsed = await parseAcceptanceCriteriaFromFile(acceptanceFilePath);
+      description = parsed.criteria[0]?.description || 'Acceptance criteria from acceptance.md';
+      acceptanceCriteria = parsed.criteria.map(c => `${c.id}: ${c.description}`).join(', ');
+    } else {
+      description = await promptChangeDescription();
+      if (p.isCancel(description)) {
+        displayOutro(false);
+        return null;
+      }
+
+      acceptanceCriteria = await promptAcceptanceCriteria();
+      if (p.isCancel(acceptanceCriteria)) {
+        displayOutro(false);
+        return null;
+      }
+    }
+  } else {
+    // Step 2: Change description
+    description = await promptChangeDescription();
+    if (p.isCancel(description)) {
+      displayOutro(false);
+      return null;
+    }
+
+    // Step 3: Acceptance criteria (optional)
+    acceptanceCriteria = await promptAcceptanceCriteria();
+    if (p.isCancel(acceptanceCriteria)) {
+      displayOutro(false);
+      return null;
+    }
   }
 
   // Step 4: Test type selection
-  const testType = await promptTestType();
+  const testType = await promptTestType(acceptanceCriteria ? TestType.API : TestType.BOTH);
   if (p.isCancel(testType)) {
     displayOutro(false);
     return null;
@@ -314,7 +351,7 @@ export async function collectUserInput(): Promise<UserInput | null> {
 
   // Step 5: Confirmation
   const confirmed = await promptConfirmation({
-    repository: repository as string,
+    repository: repositoryPath,
     description: description as string,
     acceptanceCriteria: acceptanceCriteria as string,
     testType: testType as TestType
@@ -326,7 +363,7 @@ export async function collectUserInput(): Promise<UserInput | null> {
   }
 
   return {
-    repository: repository as string,
+    repository: repositoryPath,
     description: description as string,
     acceptanceCriteria: acceptanceCriteria as string || undefined,
     testType: testType as TestType,
