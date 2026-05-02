@@ -45,7 +45,7 @@ export interface ValidationResult {
  */
 export interface ResourceAction {
   resource: string | null;
-  action: 'create' | 'read' | 'update' | 'delete' | 'list' | null;
+  action: 'create' | 'read' | 'update' | 'delete' | 'list' | 'login' | 'register' | 'verify' | 'activate' | 'reset' | 'refresh' | 'search' | null;
   keywords: string[];
 }
 
@@ -60,6 +60,13 @@ const ACTION_TO_METHOD_MAP: Record<string, string[]> = {
   update: ['PUT', 'PATCH'],
   delete: ['DELETE'],
   list: ['GET'],
+  login: ['POST'],
+  register: ['POST'],
+  verify: ['POST', 'GET'],
+  activate: ['POST', 'PUT'],
+  reset: ['POST'],
+  refresh: ['POST'],
+  search: ['GET', 'POST'],
 };
 
 /**
@@ -73,6 +80,13 @@ const ACTION_PATTERNS = {
   update: /\b(update|edit|modify|change|patch|put)\b/i,
   delete: /\b(delete|remove|destroy)\b/i,
   list: /\b(list|all|index|collection|retrieve\s+all)\b/i,
+  login: /\b(login|log\s*in|signin|sign\s*in|authenticate|auth)\b/i,
+  register: /\b(register|signup|sign\s*up|create\s+account)\b/i,
+  verify: /\b(verify|validate|confirm|check)\b/i,
+  activate: /\b(activate|enable)\b/i,
+  reset: /\b(reset|forgot|recover)\b/i,
+  refresh: /\b(refresh|renew)\b/i,
+  search: /\b(search|find|query|filter)\b/i,
 };
 
 /**
@@ -114,19 +128,67 @@ function extractKeywords(text: string): string[] {
 export function detectResourceAndAction(text: string): ResourceAction {
   const keywords = extractKeywords(text);
   
-  // Detect action using only generic CRUD patterns
+  // Detect action using enhanced patterns (including domain-specific actions)
   let action: ResourceAction['action'] = null;
+  let bestActionScore = 0;
+  
+  // Try all action patterns and pick the best match
   for (const [actionType, pattern] of Object.entries(ACTION_PATTERNS)) {
     if (pattern.test(text)) {
-      action = actionType as ResourceAction['action'];
-      break;
+      // Calculate score based on pattern specificity
+      // Domain-specific actions (login, register, etc.) get higher priority
+      const isDomainSpecific = ['login', 'register', 'verify', 'activate', 'reset', 'refresh', 'search'].includes(actionType);
+      const score = isDomainSpecific ? 2 : 1;
+      
+      if (score > bestActionScore) {
+        action = actionType as ResourceAction['action'];
+        bestActionScore = score;
+      }
     }
   }
   
-  // Do not attempt resource detection—let IBM reason about what the route actually handles
-  // Generic resource extraction can be unreliable across different domains
+  // Re-enable resource detection from paths and text
+  // Extract potential resource names from text (nouns that might be API resources)
+  const resource = extractResourceFromText(text);
   
-  return { resource: null, action, keywords };
+  return { resource, action, keywords };
+}
+
+/**
+ * Extract potential resource name from text
+ * Looks for common REST resource patterns
+ */
+function extractResourceFromText(text: string): string | null {
+  const textLower = text.toLowerCase();
+  
+  // Common resource patterns in REST APIs
+  const resourcePatterns = [
+    /\b(user|account|profile|customer|client)s?\b/i,
+    /\b(product|item|article|post|entry)s?\b/i,
+    /\b(order|transaction|payment|invoice)s?\b/i,
+    /\b(comment|review|rating|feedback)s?\b/i,
+    /\b(category|tag|label|group)s?\b/i,
+    /\b(file|document|image|media)s?\b/i,
+    /\b(message|notification|alert|email)s?\b/i,
+    /\b(session|token|credential|auth)s?\b/i,
+    /\b(setting|config|preference|option)s?\b/i,
+    /\b(report|analytics|stat|metric)s?\b/i,
+  ];
+  
+  for (const pattern of resourcePatterns) {
+    const match = textLower.match(pattern);
+    if (match) {
+      // Return the matched resource in singular form
+      let resource = match[1];
+      // Remove trailing 's' if present
+      if (resource.endsWith('s') && resource.length > 3) {
+        resource = resource.slice(0, -1);
+      }
+      return resource;
+    }
+  }
+  
+  return null;
 }
 
 /**
@@ -162,9 +224,67 @@ function pathMatchesResource(path: string, resource: string | null): boolean {
   const resourceLower = resource.toLowerCase();
   
   // Check for exact match or plural form
-  return pathLower.includes(resourceLower) || 
-         pathLower.includes(resourceLower + 's') ||
-         pathLower.includes(resourceLower + 'es');
+  const hasExactMatch = pathLower.includes(resourceLower);
+  const hasPluralMatch = pathLower.includes(resourceLower + 's') ||
+                         pathLower.includes(resourceLower + 'es');
+  
+  // Also check for path segments (e.g., /api/users vs /api/user-settings)
+  const pathSegments = pathLower.split('/').filter(s => s.length > 0);
+  const hasSegmentMatch = pathSegments.some(segment =>
+    segment === resourceLower ||
+    segment === resourceLower + 's' ||
+    segment === resourceLower + 'es'
+  );
+  
+  return hasExactMatch || hasPluralMatch || hasSegmentMatch;
+}
+
+/**
+ * Check if path contains parameter placeholders
+ * e.g., /users/{id}, /users/:id, /users/[id]
+ */
+function hasPathParameters(path: string): boolean {
+  return /\{[^}]+\}|:[a-zA-Z_][a-zA-Z0-9_]*|\[[^\]]+\]/.test(path);
+}
+
+/**
+ * Calculate path similarity score considering parameter patterns
+ */
+function calculatePathSimilarity(path1: string, path2: string): number {
+  const segments1 = path1.toLowerCase().split('/').filter(s => s.length > 0);
+  const segments2 = path2.toLowerCase().split('/').filter(s => s.length > 0);
+  
+  if (segments1.length !== segments2.length) {
+    return 0;
+  }
+  
+  let matches = 0;
+  for (let i = 0; i < segments1.length; i++) {
+    const seg1 = segments1[i];
+    const seg2 = segments2[i];
+    
+    // Exact match
+    if (seg1 === seg2) {
+      matches++;
+    }
+    // Both are parameters
+    else if (isPathParameter(seg1) && isPathParameter(seg2)) {
+      matches += 0.8; // Partial credit for parameter match
+    }
+    // One is parameter, check if other could be a value
+    else if (isPathParameter(seg1) || isPathParameter(seg2)) {
+      matches += 0.5; // Some credit for potential parameter match
+    }
+  }
+  
+  return matches / segments1.length;
+}
+
+/**
+ * Check if a path segment is a parameter
+ */
+function isPathParameter(segment: string): boolean {
+  return /^\{[^}]+\}$|^:[a-zA-Z_][a-zA-Z0-9_]*$|^\[[^\]]+\]$/.test(segment);
 }
 
 /**
@@ -244,17 +364,43 @@ export function matchRouteToTask(
     const methodMatch = !expectedMethod || route.method.toUpperCase() === expectedMethod.toUpperCase();
     const pathMatch = pathMatchesResource(route.path, resource);
     
-    // Calculate score
+    // Calculate improved score with better weighting
     let score = 0;
-    if (methodMatch) score += 40;
-    if (pathMatch) score += 40;
-    score += keywordSimilarity * 20;
     
-    // Bonus for OpenAPI description match
+    // Method match is critical (30 points)
+    if (methodMatch) score += 30;
+    
+    // Path/resource match is very important (35 points)
+    if (pathMatch) {
+      score += 35;
+    }
+    
+    // Keyword similarity (25 points)
+    score += keywordSimilarity * 25;
+    
+    // OpenAPI description match (15 points)
     if (openApiSpec && route.description) {
       const descKeywords = extractKeywords(route.description);
       const descSimilarity = calculateKeywordSimilarity(keywords, descKeywords);
-      score += descSimilarity * 10;
+      score += descSimilarity * 15;
+    }
+    
+    // Bonus for exact action match in path (10 points)
+    if (action) {
+      const pathLower = route.path.toLowerCase();
+      const actionLower = action.toLowerCase();
+      if (pathLower.includes(actionLower)) {
+        score += 10;
+      }
+    }
+    
+    // Penalty for path parameter mismatch
+    const hasParams = hasPathParameters(route.path);
+    const expectsParams = combinedText.toLowerCase().includes('id') ||
+                          combinedText.toLowerCase().includes('specific') ||
+                          combinedText.toLowerCase().includes('particular');
+    if (hasParams !== expectsParams) {
+      score -= 5;
     }
     
     return {
@@ -270,7 +416,9 @@ export function matchRouteToTask(
   scoredRoutes.sort((a, b) => b.score - a.score);
   
   const bestMatch = scoredRoutes[0];
+  const secondBestMatch = scoredRoutes[1];
   
+  // Check for no matches
   if (bestMatch.score === 0) {
     return {
       matched: false,
@@ -281,19 +429,26 @@ export function matchRouteToTask(
     };
   }
   
-  // Determine confidence level
+  // Determine confidence level with improved thresholds
   let confidence: 'high' | 'medium' | 'low';
   let reasoning: string;
   
-  if (bestMatch.score >= 80) {
+  // Check for ambiguous matches (multiple routes with similar scores)
+  const isAmbiguous = secondBestMatch && (bestMatch.score - secondBestMatch.score) < 10;
+  
+  if (bestMatch.score >= 70 && !isAmbiguous) {
     confidence = 'high';
-    reasoning = `Exact match: method=${bestMatch.methodMatch}, path=${bestMatch.pathMatch}, keywords=${(bestMatch.keywordSimilarity * 100).toFixed(0)}%`;
+    reasoning = `Strong match (score: ${bestMatch.score.toFixed(1)}): method=${bestMatch.methodMatch}, path=${bestMatch.pathMatch}, keywords=${(bestMatch.keywordSimilarity * 100).toFixed(0)}%`;
   } else if (bestMatch.score >= 50) {
     confidence = 'medium';
-    reasoning = `Partial match: method=${bestMatch.methodMatch}, path=${bestMatch.pathMatch}, keywords=${(bestMatch.keywordSimilarity * 100).toFixed(0)}%`;
+    if (isAmbiguous) {
+      reasoning = `Ambiguous match (score: ${bestMatch.score.toFixed(1)} vs ${secondBestMatch.score.toFixed(1)}): Multiple routes match similarly. Consider: ${bestMatch.route.path} and ${secondBestMatch.route.path}`;
+    } else {
+      reasoning = `Partial match (score: ${bestMatch.score.toFixed(1)}): method=${bestMatch.methodMatch}, path=${bestMatch.pathMatch}, keywords=${(bestMatch.keywordSimilarity * 100).toFixed(0)}%`;
+    }
   } else {
     confidence = 'low';
-    reasoning = `Weak match: method=${bestMatch.methodMatch}, path=${bestMatch.pathMatch}, keywords=${(bestMatch.keywordSimilarity * 100).toFixed(0)}%`;
+    reasoning = `Weak match (score: ${bestMatch.score.toFixed(1)}): method=${bestMatch.methodMatch}, path=${bestMatch.pathMatch}, keywords=${(bestMatch.keywordSimilarity * 100).toFixed(0)}%. Consider manual verification.`;
   }
   
   return {

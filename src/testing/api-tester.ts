@@ -15,9 +15,18 @@ import {
   HTTPMethod,
   AuthType,
   TraceQAError,
-  ErrorCategory
+  ErrorCategory,
+  APITestConfigWithCapture,
+  APITestResultWithCapture,
+  VariableExtraction
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
+import { TestContext } from './test-context.js';
+import {
+  classifyTestResult,
+  isLikelyNegativeTest,
+  logClassification
+} from './failure-classifier.js';
 
 /**
  * API Tester class for testing REST APIs
@@ -27,6 +36,7 @@ export class APITester {
   private defaultTimeout: number;
   private defaultRetries: number;
   private defaultRetryDelay: number;
+  private testContext: TestContext | null = null;
 
   constructor(options: {
     baseURL?: string;
@@ -54,6 +64,90 @@ export class APITester {
   }
 
   /**
+   * Set test context for variable capture and substitution
+   */
+  setContext(context: TestContext): void {
+    this.testContext = context;
+    logger.debug('Test context set', { testId: context.getTestId() });
+  }
+
+  /**
+   * Get current test context
+   */
+  getContext(): TestContext | null {
+    return this.testContext;
+  }
+
+  /**
+   * Clear test context
+   */
+  clearContext(): void {
+    this.testContext = null;
+    logger.debug('Test context cleared');
+  }
+
+  /**
+   * Apply variable substitution to request using context
+   */
+  private applyVariableSubstitution(request: APIRequest): APIRequest {
+    if (!this.testContext) {
+      return request;
+    }
+
+    const substituted: APIRequest = { ...request };
+
+    // Substitute URL
+    if (substituted.url) {
+      const urlResult = this.testContext.substituteString(substituted.url);
+      if (!urlResult.success) {
+        logger.warn(`URL substitution warning: ${urlResult.message}`);
+      }
+      substituted.url = urlResult.value;
+    }
+
+    // Substitute headers
+    if (substituted.headers) {
+      substituted.headers = this.testContext.substituteObject(substituted.headers);
+    }
+
+    // Substitute query parameters
+    if (substituted.params) {
+      substituted.params = this.testContext.substituteObject(substituted.params);
+    }
+
+    // Substitute body
+    if (substituted.body) {
+      substituted.body = this.testContext.substituteObject(substituted.body);
+    }
+
+    return substituted;
+  }
+
+  /**
+   * Capture variables from response
+   */
+  private captureVariables(
+    response: APIResponse,
+    extractions: VariableExtraction[]
+  ): Record<string, any> {
+    if (!this.testContext) {
+      logger.warn('Cannot capture variables: no test context set');
+      return {};
+    }
+
+    const captured: Record<string, any> = {};
+
+    for (const extraction of extractions) {
+      const success = this.testContext.extractAndStore(response, extraction);
+      if (success) {
+        captured[extraction.name] = this.testContext.get(extraction.name);
+      }
+    }
+
+    return captured;
+  }
+
+  /**
    * Execute a single API test
    */
   async executeTest(config: APITestConfig): Promise<APITestResult> {
@@ -67,15 +161,18 @@ export class APITester {
 
     logger.info(`Executing API test: ${config.name}`);
 
+    // Apply variable substitution if context is available
+    const substitutedRequest = this.applyVariableSubstitution(config.request);
+
     // Validate URL before attempting request
-    if (!config.request.url || config.request.url.trim() === '') {
+    if (!substitutedRequest.url || substitutedRequest.url.trim() === '') {
       const duration = Date.now() - startTime;
       logger.warn(`API test marked as UNCERTAIN due to missing URL: ${config.name}`);
       
-      return {
+      const result: APITestResult = {
         testName: config.name,
         passed: false,
-        request: config.request,
+        request: substitutedRequest,
         assertions: [{
           assertion: {
             type: AssertionType.CUSTOM,
@@ -91,34 +188,65 @@ export class APITester {
         timestamp: new Date().toISOString(),
         retryCount: 0
       };
+
+      // Classify as TraceQA generation issue
+      result.classification = classifyTestResult(result, {
+        isNegativeTest: isLikelyNegativeTest(config.description),
+        expectedStatuses: config.acceptableStatuses,
+        testDescription: config.description
+      });
+      logClassification(config.name, result.classification);
+
+      return result;
     }
 
     while (retryCount <= maxRetries) {
       try {
-        // Make the API request
-        const response = await this.makeRequest(config.request);
+        // Make the API request with substituted values
+        const response = await this.makeRequest(substitutedRequest);
+
+        // Capture variables if configured
+        let capturedVariables: Record<string, any> | undefined;
+        const configWithCapture = config as APITestConfigWithCapture;
+        if (configWithCapture.captureVariables && configWithCapture.captureVariables.length > 0) {
+          capturedVariables = this.captureVariables(response, configWithCapture.captureVariables);
+          logger.debug(`Captured ${Object.keys(capturedVariables).length} variables`);
+        }
 
         // Run assertions
         const assertionResults = await this.runAssertions(
           config.assertions,
           response,
-          config.request,
+          substitutedRequest,
           config.acceptableStatuses
         );
 
         const allPassed = assertionResults.every(r => r.passed);
         const duration = Date.now() - startTime;
 
-        const result: APITestResult = {
+        const result: APITestResultWithCapture = {
           testName: config.name,
           passed: allPassed,
-          request: config.request,
+          request: substitutedRequest,
           response,
           assertions: assertionResults,
           duration,
           timestamp: new Date().toISOString(),
-          retryCount
+          retryCount,
+          capturedVariables
         };
+
+        // Classify the test result
+        const isNegativeTest = isLikelyNegativeTest(config.description);
+        const classification = classifyTestResult(result, {
+          isNegativeTest,
+          expectedStatuses: config.acceptableStatuses,
+          testDescription: config.description
+        });
+        result.classification = classification;
+
+        // Log classification
+        logClassification(config.name, classification);
 
         if (allPassed) {
           logger.success(`API test passed: ${config.name} (${duration}ms)`);
@@ -129,7 +257,7 @@ export class APITester {
         // Only retry on network errors or for idempotent methods (GET, HEAD, OPTIONS)
         if (isNonIdempotent && response?.status) {
           logger.warn(
-            `Not retrying ${config.request.method} ${config.request.url} - non-idempotent method received status ${response.status}`
+            `Not retrying ${substitutedRequest.method} ${substitutedRequest.url} - non-idempotent method received status ${response.status}`
           );
           logger.error(`API test failed: ${config.name}`);
           return result;
@@ -138,7 +266,7 @@ export class APITester {
         // If not all passed and we have retries left
         if (retryCount < maxRetries) {
           logger.info(
-            `Retrying ${config.request.method} request due to assertion failure (attempt ${retryCount + 1}/${maxRetries}): ${config.name}`
+            `Retrying ${substitutedRequest.method} request due to assertion failure (attempt ${retryCount + 1}/${maxRetries}): ${config.name}`
           );
           retryCount++;
           await this.sleep(config.retryDelay || this.defaultRetryDelay);
@@ -154,7 +282,7 @@ export class APITester {
         // since the request may not have reached the server
         if (retryCount < maxRetries) {
           logger.warn(
-            `Retrying ${config.request.method} request due to network error (attempt ${retryCount + 1}/${maxRetries}): ${config.name}: ${error instanceof Error ? error.message : String(error)}`
+            `Retrying ${substitutedRequest.method} request due to network error (attempt ${retryCount + 1}/${maxRetries}): ${config.name}: ${error instanceof Error ? error.message : String(error)}`
           );
           retryCount++;
           await this.sleep(config.retryDelay || this.defaultRetryDelay);
@@ -163,16 +291,26 @@ export class APITester {
 
         logger.error(`API test error: ${config.name}`, error);
 
-        return {
+        const result: APITestResult = {
           testName: config.name,
           passed: false,
-          request: config.request,
+          request: substitutedRequest,
           assertions: [],
           error: error instanceof Error ? error.message : String(error),
           duration,
           timestamp: new Date().toISOString(),
           retryCount
         };
+
+        // Classify the error
+        result.classification = classifyTestResult(result, {
+          isNegativeTest: isLikelyNegativeTest(config.description),
+          expectedStatuses: config.acceptableStatuses,
+          testDescription: config.description
+        });
+        logClassification(config.name, result.classification);
+
+        return result;
       }
     }
 

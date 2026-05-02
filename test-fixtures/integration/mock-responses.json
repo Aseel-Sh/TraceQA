@@ -1,0 +1,208 @@
+{
+  "successResponses": {
+    "loginSuccess": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test",
+        "userId": "550e8400-e29b-41d4-a716-446655440000"
+      }
+    },
+    "registerSuccess": {
+      "status": 201,
+      "headers": {
+        "content-type": "application/json",
+        "location": "/users/550e8400-e29b-41d4-a716-446655440001"
+      },
+      "body": {
+        "userId": "550e8400-e29b-41d4-a716-446655440001",
+        "email": "test@example.com"
+      }
+    },
+    "getUserSuccess": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "email": "test@example.com",
+        "username": "testuser",
+        "createdAt": "2026-05-01T10:00:00Z"
+      }
+    },
+    "updateUserSuccess": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "email": "updated@example.com",
+        "username": "updateduser"
+      }
+    },
+    "deleteUserSuccess": {
+      "status": 204,
+      "headers": {},
+      "body": null
+    },
+    "listUsersSuccess": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": [
+        {
+          "id": "550e8400-e29b-41d4-a716-446655440000",
+          "email": "user1@example.com"
+        },
+        {
+          "id": "550e8400-e29b-41d4-a716-446655440001",
+          "email": "user2@example.com"
+        }
+      ]
+    },
+    "verifyEmailSuccess": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "message": "Email verified successfully"
+      }
+    }
+  },
+  "clientErrorResponses": {
+    "invalidCredentials": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "error": "Invalid email or password"
+      }
+    },
+    "badRequest": {
+      "status": 400,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "error": "Invalid request",
+        "details": [
+          "email: must be a valid email address",
+          "password: must be at least 8 characters"
+        ]
+      }
+    },
+    "notFound": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "error": "Resource not found"
+      }
+    },
+    "conflict": {
+      "status": 409,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "error": "Email already exists"
+      }
+    },
+    "unprocessableEntity": {
+      "status": 422,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "error": "Validation failed",
+        "fields": {
+          "username": "Username must contain only alphanumeric characters"
+        }
+      }
+    }
+  },
+  "serverErrorResponses": {
+    "internalServerError": {
+      "status": 500,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "error": "Internal server error",
+        "message": "An unexpected error occurred"
+      }
+    },
+    "serviceUnavailable": {
+      "status": 503,
+      "headers": {
+        "content-type": "application/json",
+        "retry-after": "60"
+      },
+      "body": {
+        "error": "Service temporarily unavailable"
+      }
+    },
+    "gatewayTimeout": {
+      "status": 504,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "error": "Gateway timeout"
+      }
+    }
+  },
+  "networkErrors": {
+    "connectionRefused": {
+      "error": "ECONNREFUSED",
+      "message": "Connection refused",
+      "code": "ECONNREFUSED"
+    },
+    "timeout": {
+      "error": "ETIMEDOUT",
+      "message": "Request timeout",
+      "code": "ETIMEDOUT"
+    },
+    "dnsError": {
+      "error": "ENOTFOUND",
+      "message": "DNS lookup failed",
+      "code": "ENOTFOUND"
+    },
+    "networkUnreachable": {
+      "error": "ENETUNREACH",
+      "message": "Network is unreachable",
+      "code": "ENETUNREACH"
+    }
+  },
+  "malformedResponses": {
+    "invalidJson": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{invalid json"
+    },
+    "emptyResponse": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    "wrongContentType": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/html"
+      },
+      "body": "<html><body>Not JSON</body></html>"
+    }
+  }
+}

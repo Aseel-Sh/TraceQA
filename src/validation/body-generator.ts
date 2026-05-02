@@ -76,11 +76,19 @@ export function generateRequestBody(
   acceptanceCriterion: AcceptanceCriterion,
   config: TraceQAConfig,
   openApiSpec?: any,
-  ibmSuggestedBody?: any
+  ibmSuggestedBody?: any,
+  contextData?: Record<string, any>
 ): BodyGenerationResult {
   const warnings: string[] = [];
   const testId = task.taskId;
   const timestamp = Date.now().toString();
+
+  // Create TestDataContext if we have context data
+  const testDataContext: TestDataContext | undefined = contextData ? {
+    setupData: contextData,
+    testId,
+    timestamp
+  } : undefined;
 
   // Methods that typically don't need a body
   const noBodyMethods = ['GET', 'DELETE', 'HEAD', 'OPTIONS'];
@@ -107,10 +115,16 @@ export function generateRequestBody(
       timestamp
     );
     if (openApiBody && Object.keys(openApiBody).length > 0) {
+      // Validate that all required fields are present
+      const validation = validateRequiredFields(openApiBody, openApiSpec, route.method, route.path);
+      if (!validation.valid) {
+        warnings.push(...validation.errors);
+      }
+      
       return {
         body: openApiBody,
         source: 'openapi',
-        confidence: 'high',
+        confidence: validation.valid ? 'high' : 'medium',
         warnings,
       };
     }
@@ -121,13 +135,20 @@ export function generateRequestBody(
     const keys = Object.keys(ibmSuggestedBody);
     if (keys.length > 0) {
       // Apply scenario modifications to IBM body
-      const modifiedBody = generateBodyForScenario(
+      let modifiedBody = generateBodyForScenario(
         scenario,
         ibmSuggestedBody,
         task,
         testId,
         timestamp
       );
+
+      // If we have context data, use generateStatefulBody to merge it
+      if (testDataContext) {
+        modifiedBody = generateStatefulBody('action', testDataContext, modifiedBody);
+        warnings.push('Body enhanced with stateful context data');
+      }
+
       return {
         body: modifiedBody,
         source: 'ibm',
@@ -173,29 +194,30 @@ export function generateRequestBody(
       timestamp
     );
     
-    warnings.push(
-      'Body generated from context inference - may not match actual API requirements'
-    );
+    // Validate inferred fields have reasonable coverage
+    const hasMultipleFields = Object.keys(scenarioBody).length >= 2;
     
     return {
       body: scenarioBody,
       source: 'inferred',
-      confidence: 'medium',
-      warnings,
+      confidence: hasMultipleFields ? 'medium' : 'low',
+      warnings: [...warnings, 'Body inferred from context - verify field completeness'],
     };
   }
 
-  // Priority 5: Generic fallback
-  warnings.push('Using generic fallback body - likely insufficient for actual API');
-  warnings.push('Consider adding OpenAPI spec or sample data to config');
+  // Priority 5: Generic fallback with enhanced field generation
+  const endpoint = route?.path || '';
+  const fallbackBody = generateGenericFallback(scenario, testId, timestamp, method, endpoint);
   
-  const fallbackBody = generateGenericFallback(scenario, testId, timestamp);
+  // Validate fallback body has reasonable fields
+  const fieldCount = Object.keys(fallbackBody).length;
+  const confidence = fieldCount >= 3 ? 'medium' : 'low';
   
   return {
     body: fallbackBody,
     source: 'generic_fallback',
-    confidence: 'low',
-    warnings,
+    confidence,
+    warnings: [...warnings, 'Using generic fallback body - verify against actual API requirements'],
   };
 }
 
@@ -242,31 +264,48 @@ export function generateBodyFromOpenAPISchema(
 ): Record<string, any> | null {
   try {
     if (!openApiSpec.paths || !openApiSpec.paths[path]) {
-      return null;
+      // Try to match path with parameters (e.g., /users/{id} when path is /users/123)
+      const matchedPath = findMatchingPathWithParams(path, openApiSpec.paths);
+      if (!matchedPath) {
+        return null;
+      }
+      path = matchedPath;
     }
 
     const pathItem = openApiSpec.paths[path];
     const operation = pathItem[method.toLowerCase()];
     
-    if (!operation || !operation.requestBody) {
+    if (!operation) {
       return null;
     }
 
-    const requestBody = operation.requestBody;
-    const content = requestBody.content || requestBody;
+    // Try to get request body schema
+    let body: Record<string, any> | null = null;
     
-    // Try to get JSON schema
-    const jsonSchema =
-      content['application/json']?.schema ||
-      content.schema ||
-      null;
+    if (operation.requestBody) {
+      const requestBody = operation.requestBody;
+      const content = requestBody.content || requestBody;
+      
+      // Try to get JSON schema
+      const jsonSchema =
+        content['application/json']?.schema ||
+        content['application/x-www-form-urlencoded']?.schema ||
+        content.schema ||
+        null;
 
-    if (!jsonSchema) {
-      return null;
+      if (jsonSchema) {
+        body = generateFromSchema(jsonSchema, openApiSpec, scenario, testId, timestamp);
+      }
     }
 
-    // Generate body from schema
-    const body = generateFromSchema(jsonSchema, openApiSpec, scenario, testId, timestamp);
+    // If no request body, check if we need to generate from parameters
+    if (!body && operation.parameters) {
+      const paramBody = generateBodyFromParameters(operation.parameters, openApiSpec, testId, timestamp);
+      if (paramBody && Object.keys(paramBody).length > 0) {
+        body = paramBody;
+      }
+    }
+
     return body;
   } catch (error) {
     return null;
@@ -274,7 +313,85 @@ export function generateBodyFromOpenAPISchema(
 }
 
 /**
- * Generate body from JSON schema
+ * Find matching OpenAPI path that includes parameters
+ * e.g., match /users/123 to /users/{id}
+ */
+function findMatchingPathWithParams(requestPath: string, paths: any): string | null {
+  const requestSegments = requestPath.split('/').filter(s => s.length > 0);
+  
+  for (const apiPath of Object.keys(paths)) {
+    const apiSegments = apiPath.split('/').filter(s => s.length > 0);
+    
+    if (requestSegments.length !== apiSegments.length) {
+      continue;
+    }
+    
+    let matches = true;
+    for (let i = 0; i < requestSegments.length; i++) {
+      const reqSeg = requestSegments[i];
+      const apiSeg = apiSegments[i];
+      
+      // Check if segment matches or is a parameter
+      if (reqSeg !== apiSeg && !isPathParameter(apiSeg)) {
+        matches = false;
+        break;
+      }
+    }
+    
+    if (matches) {
+      return apiPath;
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Check if a path segment is a parameter placeholder
+ */
+function isPathParameter(segment: string): boolean {
+  return /^\{[^}]+\}$/.test(segment);
+}
+
+/**
+ * Generate body from OpenAPI parameters (query, header, path)
+ * This is useful when there's no request body but parameters are defined
+ */
+function generateBodyFromParameters(
+  parameters: any[],
+  openApiSpec: any,
+  testId: string,
+  timestamp: string
+): Record<string, any> | null {
+  const body: Record<string, any> = {};
+  
+  for (const param of parameters) {
+    // Resolve $ref if present
+    let parameter = param;
+    if (param.$ref) {
+      parameter = resolveRef(param.$ref, openApiSpec);
+    }
+    
+    // Only include query and body-like parameters
+    if (parameter.in === 'query' || parameter.in === 'body') {
+      const schema = parameter.schema || { type: 'string' };
+      body[parameter.name] = generateFieldValue(
+        parameter.name,
+        schema,
+        'valid',
+        testId,
+        timestamp,
+        openApiSpec,
+        parameter.required || false
+      );
+    }
+  }
+  
+  return Object.keys(body).length > 0 ? body : null;
+}
+
+/**
+ * Generate body from JSON schema with support for compositions
  */
 function generateFromSchema(
   schema: any,
@@ -283,27 +400,80 @@ function generateFromSchema(
   testId: string,
   timestamp: string
 ): Record<string, any> {
-  const body: Record<string, any> = {};
+  let body: Record<string, any> = {};
 
   // Resolve $ref if present
   if (schema.$ref) {
     schema = resolveRef(schema.$ref, openApiSpec);
   }
 
+  // Handle schema compositions
+  if (schema.allOf) {
+    // Merge all schemas in allOf
+    for (const subSchema of schema.allOf) {
+      const subBody = generateFromSchema(subSchema, openApiSpec, scenario, testId, timestamp);
+      body = { ...body, ...subBody };
+    }
+    return body;
+  }
+
+  if (schema.oneOf || schema.anyOf) {
+    // Use the first schema in oneOf/anyOf
+    const schemas = schema.oneOf || schema.anyOf;
+    if (schemas.length > 0) {
+      return generateFromSchema(schemas[0], openApiSpec, scenario, testId, timestamp);
+    }
+  }
+
   const properties = schema.properties || {};
+  const required = schema.required || [];
 
+  // PRIORITY 1: Generate all required fields first
+  // This ensures required fields are always present even if property generation fails
+  for (const requiredField of required) {
+    if (properties[requiredField]) {
+      const fieldSchema = properties[requiredField] as any;
+      body[requiredField] = generateFieldValue(
+        requiredField,
+        fieldSchema,
+        scenario,
+        testId,
+        timestamp,
+        openApiSpec,
+        true // isRequired = true
+      );
+    } else {
+      // Required field not in properties - generate generic value based on field name
+      body[requiredField] = generateValueFromFieldName(requiredField, testId);
+    }
+  }
+
+  // PRIORITY 2: Generate optional fields for completeness
   for (const [fieldName, fieldSchema] of Object.entries(properties)) {
-    const field = fieldSchema as any;
+    // Skip if already generated as required field
+    if (required.includes(fieldName)) {
+      continue;
+    }
 
-    // Generate value for all fields
+    const field = fieldSchema as any;
     body[fieldName] = generateFieldValue(
       fieldName,
       field,
       scenario,
       testId,
       timestamp,
-      openApiSpec
+      openApiSpec,
+      false // isRequired = false
     );
+  }
+
+  // VALIDATION: Ensure all required fields are present
+  const missingRequired = required.filter((field: string) => !(field in body));
+  if (missingRequired.length > 0) {
+    // Generate fallback values for missing required fields
+    for (const field of missingRequired) {
+      body[field] = generateValueFromFieldName(field, testId);
+    }
   }
 
   return body;
@@ -325,16 +495,16 @@ function resolveRef(ref: string, openApiSpec: any): any {
 }
 
 /**
- * Generate value for a specific field based on schema
- * Schema-driven generation only—no hardcoded field name pattern matching
+ * Generate value for a specific field based on schema with full constraint support
  */
 function generateFieldValue(
   fieldName: string,
   fieldSchema: any,
   _scenario: BodyScenario,
   testId: string,
-  _timestamp: string,
-  openApiSpec?: any
+  timestamp: string,
+  openApiSpec?: any,
+  isRequired: boolean = true
 ): any {
   // Resolve $ref if present
   if (fieldSchema.$ref && openApiSpec) {
@@ -344,6 +514,16 @@ function generateFieldValue(
   const type = fieldSchema.type;
   const format = fieldSchema.format;
 
+  // Use example value if provided in schema
+  if (fieldSchema.example !== undefined) {
+    return fieldSchema.example;
+  }
+
+  // Use default value if provided
+  if (fieldSchema.default !== undefined) {
+    return fieldSchema.default;
+  }
+
   // Handle enum values—always use first valid option
   if (fieldSchema.enum && fieldSchema.enum.length > 0) {
     return fieldSchema.enum[0];
@@ -352,73 +532,227 @@ function generateFieldValue(
   // Handle arrays
   if (type === 'array') {
     const itemSchema = fieldSchema.items || {};
-    const item = generateFieldValue(
-      fieldName,
-      itemSchema,
-      'valid',
-      testId,
-      _timestamp,
-      openApiSpec
-    );
-    return [item];
+    const minItems = fieldSchema.minItems || 1;
+    const maxItems = fieldSchema.maxItems || minItems;
+    const itemCount = Math.min(minItems, 2); // Generate at least minItems, max 2 for brevity
+    
+    const items = [];
+    for (let i = 0; i < itemCount; i++) {
+      items.push(generateFieldValue(
+        fieldName,
+        itemSchema,
+        'valid',
+        `${testId}-${i}`,
+        timestamp,
+        openApiSpec,
+        isRequired
+      ));
+    }
+    return items;
   }
 
   // Handle objects
   if (type === 'object') {
-    return generateFromSchema(fieldSchema, openApiSpec || {}, 'valid', testId, _timestamp);
+    return generateFromSchema(fieldSchema, openApiSpec || {}, 'valid', testId, timestamp);
   }
 
-  // Handle format-based generation
+  // Handle format-based generation with proper formats
   if (format === 'email') {
-    return `user-${testId}@example.com`;
+    return generateEmailValue(fieldName, testId);
   }
-  if (format === 'date-time' || format === 'date') {
+  if (format === 'date-time') {
     return new Date().toISOString();
+  }
+  if (format === 'date') {
+    return new Date().toISOString().split('T')[0];
+  }
+  if (format === 'time') {
+    return new Date().toISOString().split('T')[1].split('.')[0];
   }
   if (format === 'uri' || format === 'url') {
     return 'https://example.com';
   }
   if (format === 'uuid') {
-    return `${testId}`;
+    return generateUUID(testId);
+  }
+  if (format === 'ipv4') {
+    return '192.168.1.1';
+  }
+  if (format === 'ipv6') {
+    return '2001:0db8:85a3:0000:0000:8a2e:0370:7334';
+  }
+  if (format === 'hostname') {
+    return 'example.com';
   }
 
-  // Handle by type only—no field name pattern matching
+  // Handle string type with constraints
   if (type === 'string') {
-    // Generic string—use field name as part of value for traceability
-    return `${fieldName}-${testId}`;
+    return generateStringValue(fieldName, fieldSchema, testId);
   }
+  
+  // Handle number/integer with constraints
   if (type === 'number' || type === 'integer') {
     return generateNumberValue(fieldName, fieldSchema);
   }
+  
   if (type === 'boolean') {
     return true;
   }
 
-  // Default fallback
+  // Use field name semantics as fallback
+  return generateValueFromFieldName(fieldName, testId);
+}
+
+/**
+ * Generate email value with proper format
+ */
+function generateEmailValue(fieldName: string, testId: string): string {
+  const namePart = fieldName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return `${namePart}-${testId}@example.com`;
+}
+
+/**
+ * Generate a valid UUID v4
+ */
+function generateUUID(seed: string): string {
+  // Generate a deterministic UUID based on seed for reproducibility
+  const hash = seed.split('').reduce((acc, char) => {
+    return ((acc << 5) - acc) + char.charCodeAt(0);
+  }, 0);
+  
+  const hex = Math.abs(hash).toString(16).padStart(8, '0');
+  return `${hex.slice(0, 8)}-${hex.slice(0, 4)}-4${hex.slice(0, 3)}-a${hex.slice(0, 3)}-${hex.slice(0, 12)}`;
+}
+
+/**
+ * Generate string value respecting schema constraints
+ */
+function generateStringValue(fieldName: string, fieldSchema: any, testId: string): string {
+  const minLength = fieldSchema.minLength || 1;
+  const maxLength = fieldSchema.maxLength || 255;
+  const pattern = fieldSchema.pattern;
+
+  // If pattern is specified, try to generate matching value
+  if (pattern) {
+    // For common patterns, generate appropriate values
+    if (/email/i.test(pattern)) {
+      return generateEmailValue(fieldName, testId);
+    }
+    if (/uuid/i.test(pattern)) {
+      return generateUUID(testId);
+    }
+    // For other patterns, use a generic value and hope it matches
+    // (proper regex-based generation would require a library)
+  }
+
+  // Generate value based on field name semantics
+  let baseValue = generateValueFromFieldName(fieldName, testId);
+  
+  // Ensure length constraints
+  if (baseValue.length < minLength) {
+    baseValue = baseValue.padEnd(minLength, 'x');
+  }
+  if (baseValue.length > maxLength) {
+    baseValue = baseValue.slice(0, maxLength);
+  }
+
+  return baseValue;
+}
+
+/**
+ * Generate value based on field name semantics
+ */
+function generateValueFromFieldName(fieldName: string, testId: string): string {
+  const nameLower = fieldName.toLowerCase();
+  
+  // Email fields
+  if (nameLower.includes('email') || nameLower === 'mail') {
+    return generateEmailValue(fieldName, testId);
+  }
+  
+  // Name fields
+  if (nameLower.includes('name') || nameLower === 'username') {
+    return `${fieldName}-${testId}`;
+  }
+  
+  // Password fields
+  if (nameLower.includes('password') || nameLower.includes('passwd')) {
+    return `SecurePass123!${testId}`;
+  }
+  
+  // Phone fields
+  if (nameLower.includes('phone') || nameLower.includes('mobile')) {
+    return '+1234567890';
+  }
+  
+  // URL fields
+  if (nameLower.includes('url') || nameLower.includes('link') || nameLower.includes('website')) {
+    return 'https://example.com';
+  }
+  
+  // ID fields
+  if (nameLower.includes('id') || nameLower === 'identifier') {
+    return testId;
+  }
+  
+  // Description/text fields
+  if (nameLower.includes('description') || nameLower.includes('text') || nameLower.includes('content')) {
+    return `Test ${fieldName} content for ${testId}`;
+  }
+  
+  // Generic fallback
   return `${fieldName}-${testId}`;
 }
 
 /**
- * Generate number value based on schema constraints only
- * No field name pattern matching
+ * Generate number value based on schema constraints
  */
-function generateNumberValue(_fieldName: string, fieldSchema: any): number {
+function generateNumberValue(fieldName: string, fieldSchema: any): number {
+  const isInteger = fieldSchema.type === 'integer';
+  
   // Check schema constraints
   const min = fieldSchema.minimum ?? fieldSchema.min;
   const max = fieldSchema.maximum ?? fieldSchema.max;
+  const exclusiveMin = fieldSchema.exclusiveMinimum;
+  const exclusiveMax = fieldSchema.exclusiveMaximum;
+  const multipleOf = fieldSchema.multipleOf;
+
+  let value: number;
 
   // Use schema constraints if available
   if (min !== undefined && max !== undefined) {
-    return min + ((max - min) / 2);
-  }
-  if (min !== undefined) {
-    return min + 1;
-  }
-  if (max !== undefined) {
-    return Math.floor(max / 2);
+    value = min + ((max - min) / 2);
+  } else if (min !== undefined) {
+    value = exclusiveMin ? min + 1 : min + 1;
+  } else if (max !== undefined) {
+    value = exclusiveMax ? max - 1 : Math.floor(max / 2);
+  } else {
+    // Use field name semantics for common numeric fields
+    const nameLower = fieldName.toLowerCase();
+    if (nameLower.includes('age')) {
+      value = 25;
+    } else if (nameLower.includes('price') || nameLower.includes('cost') || nameLower.includes('amount')) {
+      value = 99.99;
+    } else if (nameLower.includes('quantity') || nameLower.includes('count')) {
+      value = 1;
+    } else if (nameLower.includes('percent') || nameLower.includes('rate')) {
+      value = 50;
+    } else {
+      value = isInteger ? 1 : 1.0;
+    }
   }
 
-  return fieldSchema.type === 'integer' ? 1 : 1.0;
+  // Apply multipleOf constraint
+  if (multipleOf !== undefined) {
+    value = Math.round(value / multipleOf) * multipleOf;
+  }
+
+  // Ensure integer if required
+  if (isInteger) {
+    value = Math.round(value);
+  }
+
+  return value;
 }
 
 /**
@@ -453,16 +787,162 @@ function generateBodyFromConfig(
  * Infer fields from task context, acceptance criteria, and route
  * VERY conservative—only use schema and setup data, not keyword matching
  */
+/**
+ * Infer fields from context when OpenAPI schema is unavailable
+ * Uses intelligent inference based on:
+ * - Common REST API patterns
+ * - HTTP method and endpoint analysis
+ * - Task description keywords
+ *
+ * Conservative approach: only infer common, well-established patterns
+ */
 export function inferFieldsFromContext(
-  _task: QATask,
-  _acceptanceCriterion: AcceptanceCriterion,
-  _route: DiscoveredRoute | null,
-  _testId: string,
-  _timestamp: string
+  task: QATask,
+  acceptanceCriterion: AcceptanceCriterion,
+  route: DiscoveredRoute | null,
+  testId: string,
+  timestamp: string
 ): Record<string, any> {
-  // Conservative: do not invent fields based on keyword matching
-  // Fields should come from OpenAPI/schema or setup data, not guessing
-  return {};
+  const inferredFields: Record<string, any> = {};
+  
+  // Extract endpoint information
+  const endpoint = route?.path || '';
+  const method = route?.method || '';
+  const endpointLower = endpoint.toLowerCase();
+  
+  // Combine task and acceptance criterion text for keyword analysis
+  const contextText = `${task.title} ${task.expectedResult} ${acceptanceCriterion.description}`.toLowerCase();
+  
+  // Pattern 1: User/Account endpoints
+  if (endpointLower.includes('/user') || endpointLower.includes('/account')) {
+    if (method === 'POST' || method === 'PUT') {
+      // Common user fields
+      if (contextText.includes('email') || contextText.includes('mail')) {
+        inferredFields.email = generateEmailValue('email', testId);
+      }
+      if (contextText.includes('name') || contextText.includes('username')) {
+        inferredFields.name = `test-user-${testId}`;
+      }
+      if (contextText.includes('password')) {
+        inferredFields.password = `TestPass123!${testId}`;
+      }
+    }
+  }
+  
+  // Pattern 2: Product/Item endpoints
+  if (endpointLower.includes('/product') || endpointLower.includes('/item')) {
+    if (method === 'POST' || method === 'PUT') {
+      if (contextText.includes('name') || contextText.includes('title')) {
+        inferredFields.name = `test-product-${testId}`;
+      }
+      if (contextText.includes('price') || contextText.includes('cost')) {
+        inferredFields.price = 99.99;
+      }
+      if (contextText.includes('description')) {
+        inferredFields.description = `Test product description ${testId}`;
+      }
+    }
+  }
+  
+  // Pattern 3: Order endpoints
+  if (endpointLower.includes('/order')) {
+    if (method === 'POST' || method === 'PUT') {
+      if (contextText.includes('quantity') || contextText.includes('amount')) {
+        inferredFields.quantity = 1;
+      }
+      if (contextText.includes('status')) {
+        inferredFields.status = 'pending';
+      }
+    }
+  }
+  
+  // Pattern 4: Generic POST/PUT/PATCH - add common fields
+  if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+    // Add name if mentioned and not already added
+    if (!inferredFields.name && (contextText.includes('name') || contextText.includes('title'))) {
+      inferredFields.name = `test-${testId}`;
+    }
+    
+    // Add status if mentioned
+    if (!inferredFields.status && contextText.includes('status')) {
+      inferredFields.status = 'active';
+    }
+    
+    // Add description if mentioned
+    if (!inferredFields.description && contextText.includes('description')) {
+      inferredFields.description = `Test description ${testId}`;
+    }
+  }
+  
+  return inferredFields;
+}
+
+/**
+ * Validate that all required fields from OpenAPI schema are present in the generated body
+ * This is a focused validation specifically for required field presence
+ */
+export function validateRequiredFields(
+  body: Record<string, any> | null,
+  openApiSpec: any,
+  method: string,
+  path: string
+): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  
+  if (!body || !openApiSpec || !openApiSpec.paths) {
+    return { valid: true, errors: [] };
+  }
+  
+  try {
+    // Find the matching path (handle parameterized paths)
+    let matchedPath = path;
+    if (!openApiSpec.paths[path]) {
+      const found = findMatchingPathWithParams(path, openApiSpec.paths);
+      if (!found) {
+        return { valid: true, errors: [] };
+      }
+      matchedPath = found;
+    }
+    
+    const pathItem = openApiSpec.paths[matchedPath];
+    const operation = pathItem?.[method.toLowerCase()];
+    
+    if (!operation || !operation.requestBody) {
+      return { valid: true, errors: [] };
+    }
+    
+    // Get the request body schema
+    const requestBody = operation.requestBody;
+    const content = requestBody.content || requestBody;
+    const jsonSchema =
+      content['application/json']?.schema ||
+      content['application/x-www-form-urlencoded']?.schema ||
+      content.schema ||
+      null;
+    
+    if (!jsonSchema) {
+      return { valid: true, errors: [] };
+    }
+    
+    // Resolve $ref if present
+    let schema = jsonSchema;
+    if (schema.$ref) {
+      schema = resolveRef(schema.$ref, openApiSpec);
+    }
+    
+    // Check required fields
+    const required = schema.required || [];
+    for (const requiredField of required) {
+      if (!(requiredField in body)) {
+        errors.push(`Missing required field: ${requiredField}`);
+      }
+    }
+    
+    return { valid: errors.length === 0, errors };
+  } catch (error) {
+    // If validation fails, don't block - just return valid
+    return { valid: true, errors: [] };
+  }
 }
 
 /**
@@ -518,16 +998,216 @@ export function generateStatefulBody(
 /**
  * Generate generic fallback body when no other source is available
  */
+/**
+ * Generate a comprehensive generic fallback body
+ * Creates realistic multi-field bodies based on:
+ * - HTTP method (POST/PUT need more fields than GET/DELETE)
+ * - Endpoint resource type (users, products, orders, etc.)
+ * - Common field patterns
+ */
 function generateGenericFallback(
-  _scenario: BodyScenario,
+  scenario: BodyScenario,
   testId: string,
-  _timestamp: string
+  timestamp: string,
+  method?: string,
+  endpoint?: string
 ): Record<string, any> {
-  // Minimal generic placeholder—makes clear this is a fallback
-  return {
-    data: `generated-test-${testId}`,
-  };
+  const body: Record<string, any> = {};
+  const endpointLower = (endpoint || '').toLowerCase();
+  
+  // Determine resource type from endpoint
+  let resourceType = 'generic';
+  if (endpointLower.includes('/user') || endpointLower.includes('/account')) {
+    resourceType = 'user';
+  } else if (endpointLower.includes('/product') || endpointLower.includes('/item')) {
+    resourceType = 'product';
+  } else if (endpointLower.includes('/order')) {
+    resourceType = 'order';
+  } else if (endpointLower.includes('/post') || endpointLower.includes('/article')) {
+    resourceType = 'content';
+  }
+  
+  // Generate fields based on resource type
+  switch (resourceType) {
+    case 'user':
+      body.name = `test-user-${testId}`;
+      body.email = generateEmailValue('user', testId);
+      if (scenario === 'valid') {
+        body.password = `TestPass123!${testId}`;
+      } else {
+        body.password = 'weak'; // Invalid scenario
+      }
+      body.status = 'active';
+      break;
+      
+    case 'product':
+      body.name = `test-product-${testId}`;
+      body.description = `Test product description ${testId}`;
+      body.price = scenario === 'valid' ? 99.99 : -10; // Negative price for invalid
+      body.quantity = 10;
+      body.category = 'test-category';
+      break;
+      
+    case 'order':
+      body.productId = `prod-${testId}`;
+      body.quantity = scenario === 'valid' ? 1 : 0; // Zero quantity for invalid
+      body.status = 'pending';
+      body.totalAmount = 99.99;
+      break;
+      
+    case 'content':
+      body.title = `test-post-${testId}`;
+      body.content = `Test content body ${testId}`;
+      body.author = `test-author-${testId}`;
+      body.status = 'draft';
+      body.publishedAt = new Date(parseInt(timestamp)).toISOString();
+      break;
+      
+    default:
+      // Generic fallback with common fields
+      body.name = `test-${testId}`;
+      body.description = `Test description ${testId}`;
+      body.status = 'active';
+      body.createdAt = new Date(parseInt(timestamp)).toISOString();
+      body.data = `generated-test-${testId}`;
+      break;
+  }
+  
+  return body;
 }
+/**
+ * Validate generated body against OpenAPI schema
+ * 
+ * @param body - Generated body
+ * @param schema - OpenAPI schema to validate against
+ * @param openApiSpec - Full OpenAPI spec for reference resolution
+ * @returns Validation result with errors
+ */
+export function validateBodyAgainstSchema(
+  body: Record<string, any> | null,
+  schema: any,
+  openApiSpec: any
+): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  
+  if (!body || !schema) {
+    return { valid: true, errors: [] };
+  }
+  
+  // Resolve $ref if present
+  if (schema.$ref) {
+    schema = resolveRef(schema.$ref, openApiSpec);
+  }
+  
+  // Check required fields
+  if (schema.required && Array.isArray(schema.required)) {
+    for (const requiredField of schema.required) {
+      if (!(requiredField in body)) {
+        errors.push(`Missing required field: ${requiredField}`);
+      }
+    }
+  }
+  
+  // Check field types and constraints
+  const properties = schema.properties || {};
+  for (const [fieldName, value] of Object.entries(body)) {
+    const fieldSchema = properties[fieldName];
+    if (!fieldSchema) {
+      // Field not in schema - might be okay for additionalProperties
+      if (schema.additionalProperties === false) {
+        errors.push(`Field '${fieldName}' not allowed by schema`);
+      }
+      continue;
+    }
+    
+    // Validate field value
+    const fieldErrors = validateFieldValue(fieldName, value, fieldSchema, openApiSpec);
+    errors.push(...fieldErrors);
+  }
+  
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Validate a single field value against its schema
+ */
+function validateFieldValue(
+  fieldName: string,
+  value: any,
+  fieldSchema: any,
+  openApiSpec: any
+): string[] {
+  const errors: string[] = [];
+  
+  // Resolve $ref if present
+  if (fieldSchema.$ref) {
+    fieldSchema = resolveRef(fieldSchema.$ref, openApiSpec);
+  }
+  
+  const type = fieldSchema.type;
+  const actualType = Array.isArray(value) ? 'array' : typeof value;
+  
+  // Type check
+  if (type && actualType !== type && !(type === 'integer' && actualType === 'number')) {
+    errors.push(`Field '${fieldName}' has wrong type: expected ${type}, got ${actualType}`);
+    return errors; // Don't check further constraints if type is wrong
+  }
+  
+  // String constraints
+  if (type === 'string' && typeof value === 'string') {
+    if (fieldSchema.minLength && value.length < fieldSchema.minLength) {
+      errors.push(`Field '${fieldName}' is too short: ${value.length} < ${fieldSchema.minLength}`);
+    }
+    if (fieldSchema.maxLength && value.length > fieldSchema.maxLength) {
+      errors.push(`Field '${fieldName}' is too long: ${value.length} > ${fieldSchema.maxLength}`);
+    }
+    if (fieldSchema.pattern) {
+      try {
+        const regex = new RegExp(fieldSchema.pattern);
+        if (!regex.test(value)) {
+          errors.push(`Field '${fieldName}' does not match pattern: ${fieldSchema.pattern}`);
+        }
+      } catch (e) {
+        // Invalid regex in schema - skip validation
+      }
+    }
+    if (fieldSchema.enum && !fieldSchema.enum.includes(value)) {
+      errors.push(`Field '${fieldName}' must be one of: ${fieldSchema.enum.join(', ')}`);
+    }
+  }
+  
+  // Number constraints
+  if ((type === 'number' || type === 'integer') && typeof value === 'number') {
+    if (fieldSchema.minimum !== undefined && value < fieldSchema.minimum) {
+      errors.push(`Field '${fieldName}' is too small: ${value} < ${fieldSchema.minimum}`);
+    }
+    if (fieldSchema.maximum !== undefined && value > fieldSchema.maximum) {
+      errors.push(`Field '${fieldName}' is too large: ${value} > ${fieldSchema.maximum}`);
+    }
+    if (fieldSchema.exclusiveMinimum !== undefined && value <= fieldSchema.exclusiveMinimum) {
+      errors.push(`Field '${fieldName}' must be greater than ${fieldSchema.exclusiveMinimum}`);
+    }
+    if (fieldSchema.exclusiveMaximum !== undefined && value >= fieldSchema.exclusiveMaximum) {
+      errors.push(`Field '${fieldName}' must be less than ${fieldSchema.exclusiveMaximum}`);
+    }
+    if (fieldSchema.multipleOf && value % fieldSchema.multipleOf !== 0) {
+      errors.push(`Field '${fieldName}' must be multiple of ${fieldSchema.multipleOf}`);
+    }
+  }
+  
+  // Array constraints
+  if (type === 'array' && Array.isArray(value)) {
+    if (fieldSchema.minItems && value.length < fieldSchema.minItems) {
+      errors.push(`Field '${fieldName}' has too few items: ${value.length} < ${fieldSchema.minItems}`);
+    }
+    if (fieldSchema.maxItems && value.length > fieldSchema.maxItems) {
+      errors.push(`Field '${fieldName}' has too many items: ${value.length} > ${fieldSchema.maxItems}`);
+    }
+  }
+  
+  return errors;
+}
+
 
 /**
  * Validate generated body and add warnings
@@ -540,7 +1220,8 @@ function generateGenericFallback(
 export function validateGeneratedBody(
   body: Record<string, any> | null,
   method: string,
-  _route: DiscoveredRoute | null
+  _route: DiscoveredRoute | null,
+  openApiSpec?: any
 ): string[] {
   const warnings: string[] = [];
 
@@ -564,6 +1245,30 @@ export function validateGeneratedBody(
     );
     if (hasGenericValues) {
       warnings.push('Body contains generic placeholder values');
+    }
+  }
+
+  // Validate against OpenAPI schema if available
+  if (openApiSpec && _route && body) {
+    try {
+      const path = _route.path;
+      const pathItem = openApiSpec.paths?.[path];
+      const operation = pathItem?.[method.toLowerCase()];
+      
+      if (operation?.requestBody) {
+        const requestBody = operation.requestBody;
+        const content = requestBody.content || requestBody;
+        const jsonSchema = content['application/json']?.schema;
+        
+        if (jsonSchema) {
+          const validation = validateBodyAgainstSchema(body, jsonSchema, openApiSpec);
+          if (!validation.valid) {
+            warnings.push(...validation.errors.map(err => `Schema validation: ${err}`));
+          }
+        }
+      }
+    } catch (error) {
+      // Ignore validation errors - they're just warnings
     }
   }
 

@@ -15,7 +15,7 @@ import {
 import { logger, formatDuration } from '../utils/logger.js';
 
 /**
- * Report summary statistics
+ * Report summary statistics with clear, non-overlapping counts
  */
 export interface ReportSummary {
   timestamp: string;
@@ -38,19 +38,26 @@ export interface ReportSummary {
     manual: number;
   };
   executionResults: {
+    /** Total number of tests defined */
     total: number;
+    /** Tests that actually ran (excludes skipped and manual) */
     executed: number;
+    /** Tests that were not executed (skipped + manual) */
+    notExecuted: number;
+    
+    /** Execution outcomes (subset of executed) */
     passed: number;
+    /** All failures combined (subset of executed) */
     failed: number;
+    
+    /** Failure breakdown (subsets of failed) */
+    applicationFailures: number;
+    generationIssues: number;
+    infrastructureFailures: number;
     uncertain: number;
-    manual: number;
+    
+    /** Not executed breakdown (subsets of notExecuted) */
     skipped: number;
-  };
-  classifications: {
-    passed: number;
-    application_failure: number;
-    traceqa_generation_issue: number;
-    uncertain: number;
     manual: number;
   };
   mergeReadiness: 'ready' | 'not_ready' | 'uncertain';
@@ -79,6 +86,7 @@ export interface TraceMatrixEntry {
     testId: string;
     status: string;
     classification: string;
+    classificationReason: string;
     executor: string;
     duration: number;
   }[];
@@ -234,15 +242,19 @@ export class ReportGenerator {
         result => result.acceptanceCriterionId === criterion.id
       );
 
-      // Calculate coverage metrics
+      // Calculate coverage metrics using consistent "executed" definition
+      // Executed = tests that actually ran (excludes skipped and manual)
       const testsExecuted = relatedResults.filter(
-        r => r.status !== 'skipped' && r.status !== 'manual'
+        r => r.classification.classification !== 'skipped' &&
+             r.classification.classification !== 'manual'
       ).length;
       const testsPassed = relatedResults.filter(
-        r => r.status === 'passed'
+        r => r.classification.classification === 'passed'
       ).length;
       const testsFailed = relatedResults.filter(
-        r => r.status === 'failed'
+        r => r.classification.classification !== 'passed' &&
+             r.classification.classification !== 'skipped' &&
+             r.classification.classification !== 'manual'
       ).length;
 
       entries.push({
@@ -263,7 +275,8 @@ export class ReportGenerator {
         executionResults: relatedResults.map(result => ({
           testId: result.testId,
           status: result.status,
-          classification: result.classification,
+          classification: result.classification.classification,
+          classificationReason: result.classification.reason,
           executor: result.executor,
           duration: result.duration
         })),
@@ -304,37 +317,50 @@ export class ReportGenerator {
       entry => entry.generatedTests.length > 0
     ).length;
 
-    // Execution results statistics
-    // Consider only actually executed tests (passed/failed) as "executed"; uncertain/manual are not executed
-    const executed = testResults.filter(r => r.status === 'passed' || r.status === 'failed').length;
-    const passed = testResults.filter(r => r.status === 'passed').length;
-    const failed = testResults.filter(r => r.status === 'failed').length;
-    const uncertain = testResults.filter(r => r.status === 'uncertain').length;
-    const manual = testResults.filter(r => r.status === 'manual').length;
-    const skipped = testResults.filter(r => r.status === 'skipped').length;
+    // Execution results statistics using classification as primary metric
+    // EXECUTED = tests that actually ran (excludes skipped and manual)
+    // NOT EXECUTED = skipped + manual (require human intervention or were not run)
+    
+    const total = testResults.length;
+    
+    // Count by classification (primary metric)
+    const passed = testResults.filter(r => r.classification.classification === 'passed').length;
+    const applicationFailures = testResults.filter(r => r.classification.classification === 'application_failure').length;
+    const generationIssues = testResults.filter(r => r.classification.classification === 'traceqa_generation_issue').length;
+    const infrastructureFailures = testResults.filter(r => r.classification.classification === 'infrastructure_failure').length;
+    const uncertain = testResults.filter(r => r.classification.classification === 'uncertain').length;
+    const skipped = testResults.filter(r => r.classification.classification === 'skipped').length;
+    const manual = testResults.filter(r => r.classification.classification === 'manual').length;
+    
+    // Derived counts (non-overlapping)
+    const failed = applicationFailures + generationIssues + infrastructureFailures + uncertain;
+    const notExecuted = skipped + manual;
+    const executed = total - notExecuted;
+    
+    // Validation: ensure counts add up correctly
+    const countCheck = executed + notExecuted;
+    if (countCheck !== total) {
+      logger.warn(`Count validation failed: executed(${executed}) + notExecuted(${notExecuted}) = ${countCheck} != total(${total})`);
+    }
+    
+    const failedCheck = applicationFailures + generationIssues + infrastructureFailures + uncertain;
+    if (failedCheck !== failed) {
+      logger.warn(`Failed count validation: sum of failure types(${failedCheck}) != failed(${failed})`);
+    }
 
-    // Classification statistics
-    const classifications = {
-      passed: testResults.filter(r => r.classification === 'passed').length,
-      application_failure: testResults.filter(r => r.classification === 'application_failure').length,
-      traceqa_generation_issue: testResults.filter(r => r.classification === 'traceqa_generation_issue').length,
-      uncertain: testResults.filter(r => r.classification === 'uncertain').length,
-      manual: testResults.filter(r => r.classification === 'manual').length
-    };
-
-    // Determine merge readiness (preliminary)
+    // Determine merge readiness based on classification
     let mergeReadiness: 'ready' | 'not_ready' | 'uncertain' = 'ready';
-    if (classifications.application_failure > 0) {
+    if (applicationFailures > 0) {
       mergeReadiness = 'not_ready';
-    } else if (classifications.traceqa_generation_issue > 0 || classifications.uncertain > 0) {
+    } else if (generationIssues > 0 || infrastructureFailures > 0 || uncertain > 2) {
       mergeReadiness = 'uncertain';
     }
 
-    // Determine risk level (preliminary)
+    // Determine risk level
     let riskLevel: 'low' | 'medium' | 'high' = 'low';
-    if (classifications.application_failure > 2 || failed > 3) {
+    if (applicationFailures > 2 || failed > 3) {
       riskLevel = 'high';
-    } else if (classifications.application_failure > 0 || failed > 0 || uncertain > 2) {
+    } else if (applicationFailures > 0 || generationIssues > 0 || infrastructureFailures > 0 || uncertain > 2) {
       riskLevel = 'medium';
     }
 
@@ -359,15 +385,18 @@ export class ReportGenerator {
         manual: testSuite.summary.manualTests
       },
       executionResults: {
-        total: testResults.length,
+        total,
         executed,
+        notExecuted,
         passed,
         failed,
+        applicationFailures,
+        generationIssues,
+        infrastructureFailures,
         uncertain,
-        manual,
-        skipped
+        skipped,
+        manual
       },
-      classifications,
       mergeReadiness,
       riskLevel
     };
@@ -395,20 +424,26 @@ export class ReportGenerator {
     const recommendations: string[] = [];
 
     // Check for application failures
-    if (summary.classifications.application_failure > 0) {
-      risks.push(`${summary.classifications.application_failure} application failure(s) detected`);
+    if (summary.executionResults.applicationFailures > 0) {
+      risks.push(`${summary.executionResults.applicationFailures} application failure(s) detected`);
       recommendations.push('Fix application failures before merging');
     }
 
     // Check for test generation issues
-    if (summary.classifications.traceqa_generation_issue > 0) {
-      risks.push(`${summary.classifications.traceqa_generation_issue} test generation issue(s)`);
+    if (summary.executionResults.generationIssues > 0) {
+      risks.push(`${summary.executionResults.generationIssues} test generation issue(s)`);
       recommendations.push('Review and fix test generation issues');
     }
 
+    // Check for infrastructure failures
+    if (summary.executionResults.infrastructureFailures > 0) {
+      risks.push(`${summary.executionResults.infrastructureFailures} infrastructure failure(s)`);
+      recommendations.push('Check infrastructure and retry failed tests');
+    }
+
     // Check for uncertain tests
-    if (summary.classifications.uncertain > 2) {
-      risks.push(`${summary.classifications.uncertain} uncertain test(s)`);
+    if (summary.executionResults.uncertain > 2) {
+      risks.push(`${summary.executionResults.uncertain} uncertain test(s)`);
       recommendations.push('Investigate uncertain tests or run manually');
     }
 
@@ -428,11 +463,12 @@ export class ReportGenerator {
 
     // Determine final merge readiness
     let mergeReadiness: 'ready' | 'not_ready' | 'uncertain' = 'ready';
-    if (summary.classifications.application_failure > 0) {
+    if (summary.executionResults.applicationFailures > 0) {
       mergeReadiness = 'not_ready';
     } else if (
-      summary.classifications.traceqa_generation_issue > 0 ||
-      summary.classifications.uncertain > 2 ||
+      summary.executionResults.generationIssues > 0 ||
+      summary.executionResults.infrastructureFailures > 0 ||
+      summary.executionResults.uncertain > 2 ||
       executionRate < 50
     ) {
       mergeReadiness = 'uncertain';
@@ -440,11 +476,12 @@ export class ReportGenerator {
 
     // Determine risk level
     let riskLevel: 'low' | 'medium' | 'high' = 'low';
-    if (summary.classifications.application_failure > 2 || coveragePercent < 50) {
+    if (summary.executionResults.applicationFailures > 2 || coveragePercent < 50) {
       riskLevel = 'high';
     } else if (
-      summary.classifications.application_failure > 0 ||
-      summary.classifications.traceqa_generation_issue > 2 ||
+      summary.executionResults.applicationFailures > 0 ||
+      summary.executionResults.generationIssues > 2 ||
+      summary.executionResults.infrastructureFailures > 0 ||
       coveragePercent < 80
     ) {
       riskLevel = 'medium';
@@ -499,13 +536,25 @@ export class ReportGenerator {
     md += `- **Generated Tests:** ${summary.generatedTests.total} generated (${summary.generatedTests.ready} ready, ${summary.generatedTests.uncertain} uncertain, ${summary.generatedTests.manual} manual)\n`;
     md += `- **Execution Results:** ${summary.executionResults.executed}/${summary.executionResults.total} executed, ${summary.executionResults.passed} passed, ${summary.executionResults.failed} failed\n\n`;
 
-    // Result Classifications
-    md += `## Result Classifications\n\n`;
-    md += `- ✓ **Passed:** ${summary.classifications.passed}\n`;
-    md += `- ✗ **Application Failures:** ${summary.classifications.application_failure}\n`;
-    md += `- ⚠ **Test Generation Issues:** ${summary.classifications.traceqa_generation_issue}\n`;
-    md += `- ? **Uncertain:** ${summary.classifications.uncertain}\n`;
-    md += `- 👤 **Manual:** ${summary.classifications.manual}\n\n`;
+    // Execution Results with Clear Breakdown
+    md += `## Execution Results\n\n`;
+    md += `**Total Tests:** ${summary.executionResults.total}\n`;
+    md += `**Executed:** ${summary.executionResults.executed} (${((summary.executionResults.executed / summary.executionResults.total) * 100).toFixed(1)}%)\n`;
+    md += `**Not Executed:** ${summary.executionResults.notExecuted} (${((summary.executionResults.notExecuted / summary.executionResults.total) * 100).toFixed(1)}%)\n\n`;
+    
+    md += `### Execution Outcomes\n\n`;
+    md += `- ✓ **Passed:** ${summary.executionResults.passed}\n`;
+    md += `- ✗ **Failed:** ${summary.executionResults.failed}\n\n`;
+    
+    md += `### Failure Breakdown\n\n`;
+    md += `- 🐛 **Application Failures:** ${summary.executionResults.applicationFailures} (real bugs)\n`;
+    md += `- ⚠️ **Test Generation Issues:** ${summary.executionResults.generationIssues} (TraceQA issues)\n`;
+    md += `- 🔌 **Infrastructure Failures:** ${summary.executionResults.infrastructureFailures} (network/env issues)\n`;
+    md += `- ❓ **Uncertain:** ${summary.executionResults.uncertain} (needs review)\n\n`;
+    
+    md += `### Not Executed Breakdown\n\n`;
+    md += `- ⊘ **Skipped:** ${summary.executionResults.skipped}\n`;
+    md += `- 👤 **Manual:** ${summary.executionResults.manual}\n\n`;
 
     // Merge Readiness
     const readinessEmoji = {
@@ -618,12 +667,13 @@ export class ReportGenerator {
     // Test Details
     md += `## Test Details\n\n`;
 
-    // Group by classification
-    const passedTests = testResults.filter(r => r.classification === 'passed');
-    const appFailures = testResults.filter(r => r.classification === 'application_failure');
-    const genIssues = testResults.filter(r => r.classification === 'traceqa_generation_issue');
-    const uncertainTests = testResults.filter(r => r.classification === 'uncertain');
-    const manualTests = testResults.filter(r => r.classification === 'manual');
+    // Group by classification (using the classification field properly)
+    const passedTests = testResults.filter(r => r.classification.classification === 'passed');
+    const appFailures = testResults.filter(r => r.classification.classification === 'application_failure');
+    const genIssues = testResults.filter(r => r.classification.classification === 'traceqa_generation_issue');
+    const infraFailures = testResults.filter(r => r.classification.classification === 'infrastructure_failure');
+    const uncertainTests = testResults.filter(r => r.classification.classification === 'uncertain');
+    const manualTests = testResults.filter(r => r.classification.classification === 'manual');
 
     // Passed Tests
     if (passedTests.length > 0) {
@@ -644,9 +694,18 @@ export class ReportGenerator {
 
     // Test Generation Issues
     if (genIssues.length > 0) {
-      md += `### ⚠ Test Generation Issues (${genIssues.length})\n\n`;
+      md += `### ⚠️ Test Generation Issues (${genIssues.length})\n\n`;
       md += `*These are issues with test generation, not application bugs.*\n\n`;
       genIssues.forEach(result => {
+        md += this.formatTestDetail(result);
+      });
+    }
+
+    // Infrastructure Failures
+    if (infraFailures.length > 0) {
+      md += `### 🔌 Infrastructure Failures (${infraFailures.length})\n\n`;
+      md += `*These failures are due to network or environment issues.*\n\n`;
+      infraFailures.forEach(result => {
         md += this.formatTestDetail(result);
       });
     }
@@ -682,7 +741,9 @@ export class ReportGenerator {
   private formatTestDetail(result: HTTPTestResult): string {
     let md = `#### ${result.testId}: ${result.title}\n\n`;
     md += `**Status:** ${result.status}\n`;
-    md += `**Classification:** ${result.classification}\n`;
+    md += `**Classification:** ${result.classification.classification}\n`;
+    md += `**Reason:** ${result.classification.reason}\n`;
+    md += `**Confidence:** ${(result.classification.confidence * 100).toFixed(0)}%\n`;
     md += `**Executor:** ${result.executor}\n`;
     md += `**Duration:** ${formatDuration(result.duration)}\n\n`;
 
@@ -733,11 +794,13 @@ export class ReportGenerator {
     }
 
     console.log('='.repeat(80));
-    console.log(`\nTests: ${summary.executionResults.executed}/${summary.executionResults.total} executed`);
-    console.log(`Passed: ${summary.classifications.passed}`);
-    console.log(`Application Failures: ${summary.classifications.application_failure}`);
-    console.log(`Test Generation Issues: ${summary.classifications.traceqa_generation_issue}`);
-    console.log(`Uncertain: ${summary.classifications.uncertain}`);
+    console.log(`\nTests: ${summary.executionResults.executed}/${summary.executionResults.total} executed (${summary.executionResults.notExecuted} not executed)`);
+    console.log(`Passed: ${summary.executionResults.passed}`);
+    console.log(`Failed: ${summary.executionResults.failed}`);
+    console.log(`  - Application Failures: ${summary.executionResults.applicationFailures}`);
+    console.log(`  - Test Generation Issues: ${summary.executionResults.generationIssues}`);
+    console.log(`  - Infrastructure Failures: ${summary.executionResults.infrastructureFailures}`);
+    console.log(`  - Uncertain: ${summary.executionResults.uncertain}`);
     console.log('');
   }
 

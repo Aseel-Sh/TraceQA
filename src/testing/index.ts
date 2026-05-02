@@ -28,6 +28,17 @@ export {
   createWebTester
 } from './web-tester.js';
 
+// Test Context
+export {
+  TestContext,
+  createTestContext
+} from './test-context.js';
+
+export type {
+  VariableExtraction,
+  SubstitutionResult
+} from './test-context.js';
+
 // Test Normalizer
 export {
   TestNormalizer,
@@ -58,6 +69,8 @@ export type {
   APIAssertion,
   APITestResult,
   APIAuth,
+  APITestConfigWithCapture,
+  APITestResultWithCapture,
   
   // Web Testing Types
   WebTestConfig,
@@ -70,7 +83,10 @@ export type {
   
   // Test Coordinator Types
   TestCoordinatorConfig,
-  TestCoordinatorState
+  TestCoordinatorState,
+  
+  // Variable Capture Types
+  StatefulTestContext
 } from '../types/index.js';
 
 export {

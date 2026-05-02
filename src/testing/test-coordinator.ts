@@ -11,6 +11,7 @@ import { TestRunner } from './test-runner.js';
 import { APITester } from './api-tester.js';
 import { WebTester } from './web-tester.js';
 import { TestNormalizer, NormalizedTest } from './test-normalizer.js';
+import { TestContext as StatefulTestContext, createTestContext } from './test-context.js';
 import {
   writeQATaskPlan,
   writeGeneratedHTTPTests,
@@ -44,7 +45,8 @@ import {
   APIAssertion,
   DiffAnalysis,
   HTTPTestResult,
-  TraceQAConfig
+  TraceQAConfig,
+  TestFailureClassification
 } from '../types/index.js';
 import { RouteDiscoveryResult } from '../discovery/route-discovery.js';
 import { logger, formatDuration } from '../utils/logger.js';
@@ -63,6 +65,7 @@ export class TestCoordinator {
   private state: TestCoordinatorState;
   private normalizedTests: NormalizedTest[] = [];
   private routeDiscovery: RouteDiscoveryResult | null = null;
+  private statefulContext: StatefulTestContext | null = null;
 
   constructor(
     buildSystem: BuildSystem,
@@ -436,7 +439,11 @@ export class TestCoordinator {
           executor: 'uncertain',
           stepResults: [],
           evidence: [test.uncertainReason || 'Unable to generate test'],
-          classification: 'uncertain',
+          classification: {
+            classification: TestFailureClassification.UNCERTAIN,
+            reason: test.uncertainReason || 'Unable to generate test',
+            confidence: 1.0
+          },
           duration: 0,
           timestamp: new Date().toISOString()
         });
@@ -453,7 +460,11 @@ export class TestCoordinator {
           executor: 'manual',
           stepResults: [],
           evidence: ['Manual test - requires human execution'],
-          classification: 'manual',
+          classification: {
+            classification: TestFailureClassification.MANUAL,
+            reason: 'Manual test - requires human execution',
+            confidence: 1.0
+          },
           duration: 0,
           timestamp: new Date().toISOString()
         });
@@ -911,6 +922,18 @@ export class TestCoordinator {
     logger.debug(`Executing API test: ${testCase.name}`);
 
     try {
+      // Initialize stateful context if not already created
+      if (!this.statefulContext) {
+        this.statefulContext = createTestContext(testCase.id);
+        logger.debug('Created stateful test context', { testId: testCase.id });
+      }
+
+      // Set context in API tester for variable substitution
+      this.apiTester.setContext(this.statefulContext);
+
+      // Increment step number for tracking
+      this.statefulContext.incrementStep();
+
       // Convert test case steps to API test config
       if (testCase.steps.length === 0) {
         return {

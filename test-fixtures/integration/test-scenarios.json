@@ -1,0 +1,433 @@
+{
+  "routeMatchingScenarios": [
+    {
+      "name": "Login action detection",
+      "task": "User should be able to login with email and password",
+      "routes": [
+        { "path": "/auth/login", "method": "POST" },
+        { "path": "/auth/register", "method": "POST" },
+        { "path": "/users", "method": "GET" }
+      ],
+      "expected": {
+        "path": "/auth/login",
+        "method": "POST",
+        "action": "login",
+        "confidence": "high"
+      }
+    },
+    {
+      "name": "Register action detection",
+      "task": "New user registration with email verification",
+      "routes": [
+        { "path": "/auth/register", "method": "POST" },
+        { "path": "/auth/login", "method": "POST" },
+        { "path": "/auth/verify", "method": "POST" }
+      ],
+      "expected": {
+        "path": "/auth/register",
+        "method": "POST",
+        "action": "register",
+        "confidence": "high"
+      }
+    },
+    {
+      "name": "Verify action detection",
+      "task": "Verify user email address",
+      "routes": [
+        { "path": "/auth/verify", "method": "POST" },
+        { "path": "/auth/login", "method": "POST" }
+      ],
+      "expected": {
+        "path": "/auth/verify",
+        "method": "POST",
+        "action": "verify",
+        "confidence": "high"
+      }
+    },
+    {
+      "name": "Path parameter handling - update",
+      "task": "Update user profile information",
+      "routes": [
+        { "path": "/users/{id}", "method": "PUT" },
+        { "path": "/users", "method": "GET" },
+        { "path": "/users", "method": "POST" }
+      ],
+      "expected": {
+        "path": "/users/{id}",
+        "method": "PUT",
+        "action": "update",
+        "confidence": "high"
+      }
+    },
+    {
+      "name": "Path parameter handling - delete",
+      "task": "Delete user account",
+      "routes": [
+        { "path": "/users/{id}", "method": "DELETE" },
+        { "path": "/users/{id}", "method": "GET" },
+        { "path": "/users", "method": "GET" }
+      ],
+      "expected": {
+        "path": "/users/{id}",
+        "method": "DELETE",
+        "action": "delete",
+        "confidence": "high"
+      }
+    },
+    {
+      "name": "Resource detection - list",
+      "task": "Get all users",
+      "routes": [
+        { "path": "/users", "method": "GET" },
+        { "path": "/users/{id}", "method": "GET" }
+      ],
+      "expected": {
+        "path": "/users",
+        "method": "GET",
+        "action": "list",
+        "confidence": "high"
+      }
+    },
+    {
+      "name": "Resource detection - get single",
+      "task": "Get user details by ID",
+      "routes": [
+        { "path": "/users/{id}", "method": "GET" },
+        { "path": "/users", "method": "GET" }
+      ],
+      "expected": {
+        "path": "/users/{id}",
+        "method": "GET",
+        "action": "get",
+        "confidence": "high"
+      }
+    }
+  ],
+  "bodyGenerationScenarios": [
+    {
+      "name": "Required fields enforcement",
+      "schema": {
+        "type": "object",
+        "required": ["email", "password"],
+        "properties": {
+          "email": { "type": "string", "format": "email" },
+          "password": { "type": "string", "minLength": 8 }
+        }
+      },
+      "expectedFields": ["email", "password"],
+      "validation": {
+        "email": "must be valid email format",
+        "password": "must be at least 8 characters"
+      }
+    },
+    {
+      "name": "String constraints - minLength, maxLength",
+      "schema": {
+        "type": "object",
+        "required": ["username"],
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 50
+          }
+        }
+      },
+      "validation": {
+        "username": "length must be between 3 and 50"
+      }
+    },
+    {
+      "name": "String pattern constraint",
+      "schema": {
+        "type": "object",
+        "required": ["username"],
+        "properties": {
+          "username": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_]+$"
+          }
+        }
+      },
+      "validation": {
+        "username": "must match pattern ^[a-zA-Z0-9_]+$"
+      }
+    },
+    {
+      "name": "Format-specific generation - email",
+      "schema": {
+        "type": "object",
+        "required": ["email"],
+        "properties": {
+          "email": { "type": "string", "format": "email" }
+        }
+      },
+      "validation": {
+        "email": "must be valid email format"
+      }
+    },
+    {
+      "name": "Format-specific generation - uuid",
+      "schema": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" }
+        }
+      },
+      "validation": {
+        "id": "must be valid UUID format"
+      }
+    },
+    {
+      "name": "Format-specific generation - date-time",
+      "schema": {
+        "type": "object",
+        "required": ["timestamp"],
+        "properties": {
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      },
+      "validation": {
+        "timestamp": "must be valid ISO 8601 date-time"
+      }
+    },
+    {
+      "name": "Complex nested object",
+      "schema": {
+        "type": "object",
+        "required": ["user", "settings"],
+        "properties": {
+          "user": {
+            "type": "object",
+            "required": ["email"],
+            "properties": {
+              "email": { "type": "string", "format": "email" },
+              "name": { "type": "string" }
+            }
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "notifications": { "type": "boolean" }
+            }
+          }
+        }
+      },
+      "expectedFields": ["user", "settings"],
+      "validation": {
+        "user.email": "must be valid email format"
+      }
+    }
+  ],
+  "variableCaptureScenarios": [
+    {
+      "name": "Multi-step user workflow",
+      "steps": [
+        {
+          "description": "Register new user",
+          "action": "POST /auth/register",
+          "captureFrom": "response.body.userId",
+          "captureAs": "userId"
+        },
+        {
+          "description": "Get user details",
+          "action": "GET /users/{{userId}}",
+          "useVariables": ["userId"]
+        },
+        {
+          "description": "Update user",
+          "action": "PUT /users/{{userId}}",
+          "useVariables": ["userId"]
+        },
+        {
+          "description": "Delete user",
+          "action": "DELETE /users/{{userId}}",
+          "useVariables": ["userId"]
+        }
+      ]
+    },
+    {
+      "name": "Login and authenticated request",
+      "steps": [
+        {
+          "description": "User login",
+          "action": "POST /auth/login",
+          "captureFrom": "response.body.token",
+          "captureAs": "authToken"
+        },
+        {
+          "description": "Access protected resource",
+          "action": "GET /users/me",
+          "useVariables": ["authToken"],
+          "headers": {
+            "Authorization": "Bearer {{authToken}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Variable substitution in body",
+      "steps": [
+        {
+          "description": "Create resource",
+          "action": "POST /resources",
+          "captureFrom": "response.body.id",
+          "captureAs": "resourceId"
+        },
+        {
+          "description": "Reference resource in another request",
+          "action": "POST /references",
+          "useVariables": ["resourceId"],
+          "body": {
+            "resourceId": "{{resourceId}}",
+            "type": "link"
+          }
+        }
+      ]
+    }
+  ],
+  "failureClassificationScenarios": [
+    {
+      "name": "Network error - connection refused",
+      "error": {
+        "code": "ECONNREFUSED",
+        "message": "Connection refused"
+      },
+      "expected": {
+        "classification": "INFRASTRUCTURE_FAILURE",
+        "reason": "Network connectivity issue"
+      }
+    },
+    {
+      "name": "Network error - timeout",
+      "error": {
+        "code": "ETIMEDOUT",
+        "message": "Request timeout"
+      },
+      "expected": {
+        "classification": "INFRASTRUCTURE_FAILURE",
+        "reason": "Request timeout"
+      }
+    },
+    {
+      "name": "Missing URL",
+      "error": {
+        "message": "No URL provided"
+      },
+      "expected": {
+        "classification": "TRACEQA_GENERATION_ISSUE",
+        "reason": "Test generation failed to provide URL"
+      }
+    },
+    {
+      "name": "Server error - 500",
+      "response": {
+        "status": 500,
+        "body": { "error": "Internal server error" }
+      },
+      "expected": {
+        "classification": "APPLICATION_FAILURE",
+        "reason": "Server returned 5xx error"
+      }
+    },
+    {
+      "name": "Server error - 503",
+      "response": {
+        "status": 503,
+        "body": { "error": "Service unavailable" }
+      },
+      "expected": {
+        "classification": "APPLICATION_FAILURE",
+        "reason": "Server returned 5xx error"
+      }
+    },
+    {
+      "name": "Negative test - expected 401",
+      "response": {
+        "status": 401,
+        "body": { "error": "Unauthorized" }
+      },
+      "testType": "negative",
+      "expectedStatus": 401,
+      "expected": {
+        "classification": "PASSED",
+        "reason": "Received expected error status"
+      }
+    },
+    {
+      "name": "Negative test - expected 404",
+      "response": {
+        "status": 404,
+        "body": { "error": "Not found" }
+      },
+      "testType": "negative",
+      "expectedStatus": 404,
+      "expected": {
+        "classification": "PASSED",
+        "reason": "Received expected error status"
+      }
+    },
+    {
+      "name": "Client error - 400",
+      "response": {
+        "status": 400,
+        "body": { "error": "Bad request" }
+      },
+      "expected": {
+        "classification": "UNCERTAIN",
+        "reason": "Client error - could be test data or application issue"
+      }
+    }
+  ],
+  "reportCountingScenarios": [
+    {
+      "name": "Basic counting validation",
+      "testResults": [
+        { "status": "PASSED", "executed": true },
+        { "status": "FAILED", "executed": true },
+        { "status": "SKIPPED", "executed": false }
+      ],
+      "expected": {
+        "total": 3,
+        "executed": 2,
+        "notExecuted": 1,
+        "passed": 1,
+        "failed": 1
+      }
+    },
+    {
+      "name": "Failure breakdown",
+      "testResults": [
+        { "status": "FAILED", "classification": "APPLICATION_FAILURE", "executed": true },
+        { "status": "FAILED", "classification": "INFRASTRUCTURE_FAILURE", "executed": true },
+        { "status": "FAILED", "classification": "TRACEQA_GENERATION_ISSUE", "executed": true },
+        { "status": "FAILED", "classification": "UNCERTAIN", "executed": true }
+      ],
+      "expected": {
+        "total": 4,
+        "executed": 4,
+        "failed": 4,
+        "applicationFailures": 1,
+        "infrastructureFailures": 1,
+        "generationIssues": 1,
+        "uncertainFailures": 1
+      }
+    },
+    {
+      "name": "No duplicate counting",
+      "testResults": [
+        { "status": "PASSED", "executed": true },
+        { "status": "PASSED", "executed": true },
+        { "status": "FAILED", "executed": true }
+      ],
+      "expected": {
+        "total": 3,
+        "executed": 3,
+        "passed": 2,
+        "failed": 1,
+        "validation": "total === executed + notExecuted"
+      }
+    }
+  ]
+}

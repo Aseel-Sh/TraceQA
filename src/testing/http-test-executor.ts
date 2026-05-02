@@ -12,6 +12,7 @@ import {
   HTTPStepResult,
   HTTPTestResult,
   TraceQAConfig,
+  TestFailureClassification,
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -411,41 +412,53 @@ function shouldSkipStep(
 
 /**
  * Classify test result based on step results
- * 
+ *
  * Classification rules:
  * - passed: All steps passed, app behaved as expected
  * - application_failure: App returned status/body outside acceptable expectations
  * - traceqa_generation_issue: Test had invalid URL, method, or body (generation problem)
  * - uncertain: Test was marked uncertain, not executed
  * - manual: Test was marked manual, not executed
- * 
+ *
  * Note: Do not classify app rejection of invalid input as application_failure.
  * If test expects 400 for invalid email and gets 400, that's passed, not failed.
- * 
+ *
  * @param test - The test that was executed
  * @param stepResults - Results from all steps
- * @returns Classification string
+ * @returns Classification result with reasoning
  */
 function classifyTestResult(
   test: GeneratedHTTPTest,
   stepResults: HTTPStepResult[]
-): 'application_failure' | 'traceqa_generation_issue' | 'uncertain' | 'manual' | 'passed' {
+): import('../types/index.js').ClassificationResult {
   // Check test status first
   if (test.status === 'uncertain') {
-    return 'uncertain';
+    return {
+      classification: TestFailureClassification.UNCERTAIN,
+      reason: test.uncertainReason || 'Test marked as uncertain',
+      confidence: 1.0
+    };
   }
   if (test.status === 'manual') {
-    return 'manual';
+    return {
+      classification: TestFailureClassification.MANUAL,
+      reason: 'Test requires manual execution',
+      confidence: 1.0
+    };
   }
 
   // If all steps passed, it's passed
   const allPassed = stepResults.every(result => result.passed);
   if (allPassed) {
-    return 'passed';
+    return {
+      classification: TestFailureClassification.PASSED,
+      reason: 'All test steps passed successfully',
+      confidence: 1.0
+    };
   }
 
   // Check for generation issues (invalid URLs, network errors indicating bad test data)
-  const hasGenerationIssue = stepResults.some(result => {
+  const generationIssues = stepResults.filter(result => {
     if (!result.error) return false;
 
     const error = result.error.toLowerCase();
@@ -466,13 +479,44 @@ function classifyTestResult(
     return false;
   });
 
-  if (hasGenerationIssue) {
-    return 'traceqa_generation_issue';
+  if (generationIssues.length > 0) {
+    const reasons = generationIssues.map(r => r.error).join('; ');
+    return {
+      classification: TestFailureClassification.TRACEQA_GENERATION_ISSUE,
+      reason: `Test generation issues detected: ${reasons}`,
+      confidence: 0.9,
+      metadata: { failedSteps: generationIssues.length, totalSteps: stepResults.length }
+    };
+  }
+
+  // Check for infrastructure failures (network errors)
+  const infrastructureIssues = stepResults.filter(result => {
+    if (!result.error) return false;
+    const error = result.error.toLowerCase();
+    return error.includes('econnrefused') ||
+           error.includes('etimedout') ||
+           error.includes('enotfound') ||
+           error.includes('network');
+  });
+
+  if (infrastructureIssues.length > 0) {
+    return {
+      classification: TestFailureClassification.INFRASTRUCTURE_FAILURE,
+      reason: 'Network or infrastructure errors detected',
+      confidence: 0.85,
+      metadata: { failedSteps: infrastructureIssues.length, totalSteps: stepResults.length }
+    };
   }
 
   // Otherwise, it's an application failure
   // The app returned a response, but it didn't match expectations
-  return 'application_failure';
+  const failedSteps = stepResults.filter(r => !r.passed);
+  return {
+    classification: TestFailureClassification.APPLICATION_FAILURE,
+    reason: `Application returned unexpected responses in ${failedSteps.length} step(s)`,
+    confidence: 0.8,
+    metadata: { failedSteps: failedSteps.length, totalSteps: stepResults.length }
+  };
 }
 
 // ============================================================================
@@ -575,7 +619,11 @@ export async function executeHTTPTest(
       evidence: [
         `Test marked as uncertain: ${test.uncertainReason || 'No reason provided'}`,
       ],
-      classification: 'uncertain',
+      classification: {
+        classification: TestFailureClassification.UNCERTAIN,
+        reason: test.uncertainReason || 'No reason provided',
+        confidence: 1.0
+      },
       duration,
       timestamp: new Date().toISOString(),
     };
@@ -595,7 +643,11 @@ export async function executeHTTPTest(
       evidence: [
         'Test requires manual execution',
       ],
-      classification: 'manual',
+      classification: {
+        classification: TestFailureClassification.MANUAL,
+        reason: 'Test requires manual execution',
+        confidence: 1.0
+      },
       duration,
       timestamp: new Date().toISOString(),
     };
@@ -742,7 +794,7 @@ export async function executeHTTPTests(
       } else if (result.status === 'manual') {
         logger.info(`ℹ Test requires manual execution`);
       } else {
-        logger.error(`✗ Test failed (${result.duration}ms)`, new Error(result.classification));
+        logger.error(`✗ Test failed (${result.duration}ms): ${result.classification.reason}`);
       }
     } catch (error) {
       logger.error(`Failed to execute test: ${test.title}`, error);
@@ -759,7 +811,11 @@ export async function executeHTTPTests(
         evidence: [
           `Test execution error: ${error instanceof Error ? error.message : String(error)}`,
         ],
-        classification: 'traceqa_generation_issue',
+        classification: {
+          classification: TestFailureClassification.TRACEQA_GENERATION_ISSUE,
+          reason: `Test execution error: ${error instanceof Error ? error.message : String(error)}`,
+          confidence: 0.9
+        },
         duration: 0,
         timestamp: new Date().toISOString(),
       });

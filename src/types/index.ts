@@ -916,6 +916,68 @@ export interface APITestResult {
   duration: number;
   timestamp: string;
   retryCount: number;
+  /** Classification of the test result */
+  classification?: ClassificationResult;
+}
+
+// ============================================================================
+// Variable Capture and Test Context Types
+// ============================================================================
+
+/**
+ * Variable extraction configuration for capturing values from responses
+ */
+export interface VariableExtraction {
+  /** Name to store the extracted value under */
+  name: string;
+  /** JSONPath expression to extract value from response */
+  path: string;
+  /** Source of extraction (body, headers, status) */
+  source?: 'body' | 'headers' | 'status';
+}
+
+/**
+ * Variable substitution result
+ */
+export interface SubstitutionResult {
+  /** The substituted value */
+  value: string;
+  /** Whether substitution was successful */
+  success: boolean;
+  /** Any warnings or errors */
+  message?: string;
+}
+
+/**
+ * Stateful test context for multi-step test sequences
+ */
+export interface StatefulTestContext {
+  /** Variables captured from previous test steps */
+  variables: Record<string, any>;
+  /** Test metadata */
+  metadata: {
+    testId: string;
+    timestamp: string;
+    stepNumber: number;
+  };
+}
+
+/**
+ * API test configuration with variable capture support
+ */
+export interface APITestConfigWithCapture extends APITestConfig {
+  /** Variables to extract from the response */
+  captureVariables?: VariableExtraction[];
+  /** Test context for variable substitution */
+  context?: StatefulTestContext;
+}
+
+/**
+ * API test result with captured variables
+ */
+export interface APITestResultWithCapture extends APITestResult {
+  /** Variables captured during this test */
+  capturedVariables?: Record<string, any>;
 }
 
 // ============================================================================
@@ -1094,7 +1156,8 @@ export interface HTTPTestResult {
   executor: 'http' | 'mcp-browser' | 'manual' | 'uncertain';
   stepResults: HTTPStepResult[];
   evidence: string[];
-  classification: 'application_failure' | 'traceqa_generation_issue' | 'uncertain' | 'manual' | 'passed';
+  /** Detailed classification of the test result */
+  classification: ClassificationResult;
   duration: number;
   timestamp: string;
 }
@@ -1179,6 +1242,43 @@ export enum TestExecutionStatus {
   SKIPPED = 'skipped',
   TIMEOUT = 'timeout',
   ERROR = 'error'
+}
+
+/**
+ * Test failure classification categories
+ * Distinguishes between different types of test failures for better analysis
+ */
+export enum TestFailureClassification {
+  /** Test executed successfully and all assertions passed */
+  PASSED = 'passed',
+  /** Real application bug (unexpected 500 error, wrong business logic) */
+  APPLICATION_FAILURE = 'application_failure',
+  /** Test generation problem (missing URL, invalid body, bad route match) */
+  TRACEQA_GENERATION_ISSUE = 'traceqa_generation_issue',
+  /** Network/environment issue (connection refused, timeout, DNS failure) */
+  INFRASTRUCTURE_FAILURE = 'infrastructure_failure',
+  /** Ambiguous result (missing assertions, unclear expectations) */
+  UNCERTAIN = 'uncertain',
+  /** Requires manual verification */
+  MANUAL = 'manual',
+  /** Test was not executed */
+  SKIPPED = 'skipped'
+}
+
+/**
+ * Detailed classification result with reasoning
+ */
+export interface ClassificationResult {
+  /** The classification category */
+  classification: TestFailureClassification;
+  /** Human-readable explanation of why this classification was chosen */
+  reason: string;
+  /** Confidence score (0-1) in the classification */
+  confidence: number;
+  /** Whether this is an expected failure (e.g., negative test) */
+  isExpectedFailure?: boolean;
+  /** Additional context or metadata */
+  metadata?: Record<string, any>;
 }
 
 /**
