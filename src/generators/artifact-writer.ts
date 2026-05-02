@@ -1,6 +1,8 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { GeneratedTestArtifacts, ExecutableHTTPTest } from './test-generator';
+import { NormalizedTest } from '../testing/test-normalizer.js';
+import { APITestConfig, AssertionType } from '../types/index.js';
 
 const OUTPUT_DIR = 'traceqa-generated';
 
@@ -166,6 +168,112 @@ export async function readGeneratedHTTPTests(): Promise<ExecutableHTTPTest[]> {
  */
 export async function artifactsExist(): Promise<boolean> {
   return await fs.pathExists(path.join(OUTPUT_DIR, 'generated-http-tests.json'));
+}
+
+/**
+ * Write normalized tests to file
+ * This includes the full HTTP test schema with validated URLs
+ */
+export async function writeNormalizedTests(
+  normalizedTests: NormalizedTest[],
+  outputDir: string = OUTPUT_DIR
+): Promise<string> {
+  await fs.ensureDir(outputDir);
+  
+  // Convert normalized tests to API test configs
+  const apiTestConfigs: APITestConfig[] = normalizedTests.map(nt => nt.config);
+  
+  // Write full normalized tests (includes validation info)
+  const normalizedFilePath = path.join(outputDir, 'normalized-tests.json');
+  await fs.writeFile(
+    normalizedFilePath,
+    JSON.stringify(normalizedTests, null, 2),
+    'utf-8'
+  );
+  
+  // Write API test configs (for execution)
+  const configFilePath = path.join(outputDir, 'generated-http-tests.json');
+  await fs.writeFile(
+    configFilePath,
+    JSON.stringify(apiTestConfigs, null, 2),
+    'utf-8'
+  );
+  
+  // Generate markdown documentation
+  const markdown = generateNormalizedTestMarkdown(normalizedTests);
+  const markdownPath = path.join(outputDir, 'generated-tests.md');
+  await fs.writeFile(markdownPath, markdown, 'utf-8');
+  
+  return normalizedFilePath;
+}
+
+/**
+ * Generate markdown documentation for normalized tests
+ */
+function generateNormalizedTestMarkdown(normalizedTests: NormalizedTest[]): string {
+  let markdown = '# Generated Test Documentation\n\n';
+  markdown += `**Generated:** ${new Date().toLocaleString()}\n\n`;
+  markdown += `**Total Tests:** ${normalizedTests.length}\n`;
+  markdown += `**Valid Tests:** ${normalizedTests.filter(t => t.isValid).length}\n`;
+  markdown += `**Invalid Tests:** ${normalizedTests.filter(t => !t.isValid).length}\n\n`;
+  
+  // Group by validity
+  const validTests = normalizedTests.filter(t => t.isValid);
+  const invalidTests = normalizedTests.filter(t => !t.isValid);
+  
+  if (validTests.length > 0) {
+    markdown += '---\n\n';
+    markdown += '## ✅ Valid Tests\n\n';
+    
+    validTests.forEach((test, index) => {
+      const config = test.config;
+      markdown += `### ${index + 1}. ${config.name}\n\n`;
+      markdown += `**Description:** ${config.description}\n\n`;
+      markdown += `**Request:**\n`;
+      markdown += `- Method: \`${config.request.method}\`\n`;
+      markdown += `- URL: \`${config.request.url}\`\n`;
+      
+      if (config.request.headers && Object.keys(config.request.headers).length > 0) {
+        markdown += `- Headers:\n`;
+        Object.entries(config.request.headers).forEach(([key, value]) => {
+          markdown += `  - \`${key}: ${value}\`\n`;
+        });
+      }
+      
+      if (config.request.body) {
+        markdown += `- Body:\n\`\`\`json\n${JSON.stringify(config.request.body, null, 2)}\n\`\`\`\n`;
+      }
+      
+      markdown += `\n**Expected Response:**\n`;
+      config.assertions.forEach(assertion => {
+        if (assertion.type === AssertionType.STATUS_CODE) {
+          markdown += `- Status: \`${assertion.expected}\`\n`;
+        } else {
+          markdown += `- ${assertion.type}: \`${assertion.expected}\`\n`;
+        }
+      });
+      
+      markdown += '\n---\n\n';
+    });
+  }
+  
+  if (invalidTests.length > 0) {
+    markdown += '## ❌ Invalid Tests (Generation Errors)\n\n';
+    markdown += '*These tests could not be normalized due to generation errors or missing information.*\n\n';
+    
+    invalidTests.forEach((test, index) => {
+      markdown += `### ${index + 1}. ${test.config.name}\n\n`;
+      markdown += `**Error Type:** \`${test.errorType}\`\n\n`;
+      markdown += `**Error Message:** ${test.errorMessage}\n\n`;
+      markdown += `**Original Test Case:**\n`;
+      markdown += `- Name: ${test.originalTestCase.name}\n`;
+      markdown += `- Description: ${test.originalTestCase.description}\n`;
+      markdown += `- Expected Result: ${test.originalTestCase.expectedResult}\n`;
+      markdown += '\n---\n\n';
+    });
+  }
+  
+  return markdown;
 }
 
 // Made with Bob

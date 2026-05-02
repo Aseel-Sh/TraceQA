@@ -10,6 +10,7 @@ import { MCPClientManager } from '../mcp/index.js';
 import { TestRunner } from './test-runner.js';
 import { APITester } from './api-tester.js';
 import { WebTester } from './web-tester.js';
+import { TestNormalizer, NormalizedTest } from './test-normalizer.js';
 import {
   TestConfig,
   TestContext,
@@ -32,7 +33,7 @@ import {
   DiffAnalysis
 } from '../types/index.js';
 import { RouteDiscoveryResult } from '../discovery/route-discovery.js';
-import { logger } from '../utils/logger.js';
+import { logger, formatDuration } from '../utils/logger.js';
 
 /**
  * Test Coordinator class
@@ -46,6 +47,8 @@ export class TestCoordinator {
   private webTester: WebTester | null = null;
   private config: Required<Omit<TestCoordinatorConfig, 'baseUrl' | 'healthUrl'>> & { baseUrl?: string; healthUrl?: string };
   private state: TestCoordinatorState;
+  private normalizedTests: NormalizedTest[] = [];
+  private routeDiscovery: RouteDiscoveryResult | null = null;
 
   constructor(
     buildSystem: BuildSystem,
@@ -115,6 +118,9 @@ export class TestCoordinator {
 
       // Phase 3: Create test context
       const context = await this.createTestContext(testConfig, buildResult, diffAnalysis);
+
+      // Store route discovery for normalization
+      this.routeDiscovery = discoveredRoutes || null;
 
       // Log discovered routes if available
       if (discoveredRoutes && discoveredRoutes.routes.length > 0) {
@@ -386,6 +392,29 @@ export class TestCoordinator {
   ): Promise<TestResults> {
     logger.info(`Executing test plan with ${testPlan.testCases.length} test cases...`);
 
+    // NORMALIZATION LAYER: Transform IBM test cases into validated API test configs
+    logger.info('🔄 Normalizing test cases...');
+    const normalizer = new TestNormalizer({
+      baseUrl: this.config.baseUrl,
+      discoveredRoutes: this.routeDiscovery?.routes || [],
+      strictValidation: true
+    });
+
+    this.normalizedTests = normalizer.normalizeTestCases(testPlan.testCases, context);
+
+    // Log normalization results
+    const validTests = this.normalizedTests.filter(t => t.isValid).length;
+    const invalidTests = this.normalizedTests.filter(t => !t.isValid).length;
+    logger.info(`✅ Valid tests: ${validTests}`);
+    if (invalidTests > 0) {
+      logger.warn(`⚠️  Invalid tests: ${invalidTests}`);
+      
+      // Log details of invalid tests
+      this.normalizedTests.filter(t => !t.isValid).forEach(test => {
+        logger.warn(`  - ${test.config.name}: ${test.errorType} - ${test.errorMessage}`);
+      });
+    }
+
     // Initialize testers based on test types
     const testTypes = new Set(testPlan.testCases.map(tc => tc.type));
 
@@ -574,10 +603,8 @@ export class TestCoordinator {
         logger.debug(`  Response Body: ${JSON.stringify(apiTestResult.response.body).substring(0, 200)}...`);
       }
 
-      // Format duration properly: ms for < 1000ms, seconds for >= 1000ms
-      const formattedDuration = duration < 1000
-        ? `${duration}ms`
-        : `${(duration / 1000).toFixed(2)}s`;
+      // Format duration consistently using shared utility
+      const formattedDuration = formatDuration(duration);
       
       // Capture full evidence in test results
       const evidence = [
@@ -1017,6 +1044,13 @@ export class TestCoordinator {
    */
   getMCPManager(): MCPClientManager {
     return this.mcpManager;
+  }
+
+  /**
+   * Get normalized tests (for artifact generation)
+   */
+  getNormalizedTests(): NormalizedTest[] {
+    return this.normalizedTests;
   }
 }
 

@@ -13,7 +13,7 @@ import {
   ReportData,
   TestResult
 } from '../types/index.js';
-import { logger } from '../utils/logger.js';
+import { logger, formatDuration } from '../utils/logger.js';
 
 /**
  * Report Generator Class
@@ -282,21 +282,168 @@ export class ReportGenerator {
 
   /**
    * Determine test status (passed/failed/uncertain)
+   * CRITICAL: Properly classify generation errors vs app errors
+   * Uses generic HTTP semantics instead of route-specific logic
    */
   private determineTestStatus(test: TestResult): 'passed' | 'failed' | 'uncertain' {
     if (test.passed) {
       return 'passed';
     }
-    
-    // Check if the failure is due to uncertainty (e.g., MCP not configured)
-    const uncertainKeywords = ['uncertain', 'mcp not configured', 'not available', 'skipped'];
-    const message = (test.message + ' ' + (test.error || '')).toLowerCase();
-    
-    if (uncertainKeywords.some(keyword => message.includes(keyword))) {
+
+    const message = test.message?.toLowerCase() || '';
+    const error = test.error?.toLowerCase() || '';
+    const combinedText = `${message} ${error}`;
+
+    // Check for status mismatch
+    const hasStatusMismatch = combinedText.includes('expected status') ||
+                             combinedText.includes('but got') ||
+                             combinedText.includes('status code');
+
+    // Check for generation errors
+    const generationErrorKeywords = [
+      'traceqa generation error',
+      'url is an object',
+      'invalid url format',
+      'normalization failed',
+      'no endpoint or base url was available',
+      'expected status',
+      'status mismatch',
+      'incorrect expected status'
+    ];
+
+    const hasGenerationError = generationErrorKeywords.some(keyword =>
+      combinedText.includes(keyword)
+    );
+
+    if (hasGenerationError) {
       return 'uncertain';
     }
-    
+
+    // If there's a status mismatch, try to determine if it's a generation issue
+    if (hasStatusMismatch) {
+      // Extract actual status from message
+      const statusMatch = combinedText.match(/(?:got|received|actual|status)\s+(\d{3})/);
+      const actualStatus = statusMatch ? parseInt(statusMatch[1]) : null;
+      
+      if (actualStatus) {
+        // Check if the actual status makes semantic sense
+        const isSemanticallySensible = this.isStatusSemanticallySensible(
+          actualStatus,
+          test.testCaseName || '',
+          combinedText
+        );
+        
+        if (isSemanticallySensible) {
+          return 'uncertain'; // Expected status was probably wrong
+        }
+      }
+    }
+
+    // Check for uncertain/manual scenarios
+    const uncertainKeywords = [
+      'uncertain',
+      'mcp not configured',
+      'not available',
+      'skipped',
+      'could not execute',
+      'cannot determine',
+      'manual qa required'
+    ];
+
+    const isUncertain = uncertainKeywords.some(keyword =>
+      combinedText.includes(keyword)
+    );
+
+    if (isUncertain) {
+      return 'uncertain';
+    }
+
+    // Default to failed (app issue)
     return 'failed';
+  }
+
+  /**
+   * Check if an HTTP status code makes semantic sense for a given test
+   * Uses generic HTTP semantics instead of hardcoded route logic
+   */
+  private isStatusSemanticallySensible(
+    actualStatus: number,
+    testName: string,
+    messageText: string
+  ): boolean {
+    const lowerTestName = testName.toLowerCase();
+    const lowerMessage = messageText.toLowerCase();
+    
+    // Success scenarios (2xx)
+    if (actualStatus >= 200 && actualStatus < 300) {
+      // If test name suggests success, 2xx is sensible
+      if (lowerTestName.includes('success') ||
+          lowerTestName.includes('valid') ||
+          lowerTestName.includes('correct')) {
+        return true;
+      }
+      
+      // 201 Created is sensible for any POST that creates a resource
+      if (actualStatus === 201 && lowerMessage.includes('post')) {
+        return true;
+      }
+      
+      // 204 No Content is sensible for DELETE/PUT/PATCH
+      if (actualStatus === 204 &&
+          (lowerMessage.includes('delete') ||
+           lowerMessage.includes('put') ||
+           lowerMessage.includes('patch'))) {
+        return true;
+      }
+    }
+    
+    // Client errors (4xx)
+    if (actualStatus >= 400 && actualStatus < 500) {
+      // 400/422 is sensible for validation/input errors
+      if ((actualStatus === 400 || actualStatus === 422) &&
+          (lowerTestName.includes('invalid') ||
+           lowerTestName.includes('bad') ||
+           lowerTestName.includes('malformed') ||
+           lowerTestName.includes('missing'))) {
+        return true;
+      }
+      
+      // 401 is sensible for auth failures
+      if (actualStatus === 401 &&
+          (lowerTestName.includes('unauthorized') ||
+           lowerTestName.includes('auth') ||
+           lowerTestName.includes('credential'))) {
+        return true;
+      }
+      
+      // 403 is sensible for permission issues
+      if (actualStatus === 403 &&
+          (lowerTestName.includes('forbidden') ||
+           lowerTestName.includes('permission') ||
+           lowerTestName.includes('access denied'))) {
+        return true;
+      }
+      
+      // 404 is sensible for not found scenarios
+      if (actualStatus === 404 &&
+          (lowerTestName.includes('not found') ||
+           lowerTestName.includes('missing') ||
+           lowerTestName.includes('nonexistent'))) {
+        return true;
+      }
+      
+      // 409 is sensible for conflict/duplicate scenarios
+      if (actualStatus === 409 &&
+          (lowerTestName.includes('conflict') ||
+           lowerTestName.includes('duplicate') ||
+           lowerTestName.includes('already exists'))) {
+        return true;
+      }
+    }
+    
+    // If we can't determine, assume it might be sensible
+    // (conservative approach - don't falsely claim generation error)
+    return false;
   }
 
   /**
@@ -306,18 +453,63 @@ export class ReportGenerator {
     const evidence: string[] = [];
     
     if (test.error) {
-      evidence.push(`Error: ${test.error}`);
+      const sanitizedError = this.sanitizeMessage(test.error);
+      evidence.push(`Error: ${sanitizedError}`);
     }
     
     if (test.message && !test.passed) {
-      evidence.push(test.message);
+      const sanitizedMessage = this.sanitizeMessage(test.message);
+      evidence.push(`Message: ${sanitizedMessage}`);
     }
     
     if (test.logs && test.logs.length > 0) {
-      evidence.push(`Logs: ${test.logs.join(', ')}`);
+      // Only include error and warning logs, limit to last 5
+      const relevantLogs = test.logs
+        .filter(log => log.includes('error') || log.includes('warn') || log.includes('failed'))
+        .slice(-5);
+      
+      if (relevantLogs.length > 0) {
+        evidence.push(`Logs: ${relevantLogs.join('; ')}`);
+      }
     }
     
     return evidence.length > 0 ? evidence.join(' | ') : undefined;
+  }
+
+  /**
+   * Sanitize message to remove sensitive data and unrelated content
+   */
+  private sanitizeMessage(message: string): string {
+    // Remove potential sensitive data patterns
+    let sanitized = message;
+    
+    // Truncate very long messages
+    if (sanitized.length > 500) {
+      sanitized = sanitized.substring(0, 500) + '... (truncated)';
+    }
+    
+    // Remove unrelated prompt fragments
+    const stopPatterns = [
+      '<|user|>',
+      '<|assistant|>',
+      'User Profile Update',
+      'User Profile Deletion',
+      /\[INST\]/gi,
+      /\[\/INST\]/gi
+    ];
+    
+    for (const pattern of stopPatterns) {
+      if (typeof pattern === 'string') {
+        const index = sanitized.indexOf(pattern);
+        if (index !== -1) {
+          sanitized = sanitized.substring(0, index).trim();
+        }
+      } else {
+        sanitized = sanitized.replace(pattern, '').trim();
+      }
+    }
+    
+    return sanitized;
   }
 
   /**
@@ -424,7 +616,7 @@ export class ReportGenerator {
     md += `- **Uncertain**: ${mergeReadiness.factors.uncertainTests} ❓\n`;
     md += `- **Coverage**: ${traceMatrix.coveragePercentage.toFixed(1)}%\n`;
     md += `- **Success Rate**: ${summary.successRate.toFixed(1)}%\n`;
-    md += `- **Duration**: ${summary.duration.toFixed(2)}s\n\n`;
+    md += `- **Duration**: ${formatDuration(summary.duration)}\n\n`;
     
     // Recommendation
     md += `### Recommendation\n\n`;
@@ -461,36 +653,62 @@ export class ReportGenerator {
     }
     md += `\n`;
     
-    // Detailed Test Results
+    // Detailed Test Results - Group by status
+    const passedResults = testResults.results.filter(r => r.passed);
+    const failedResults = testResults.results.filter(r => !r.passed && this.determineTestStatus(r) === 'failed');
+    const uncertainResults = testResults.results.filter(r => !r.passed && this.determineTestStatus(r) === 'uncertain');
+    
     md += `## Detailed Test Results\n\n`;
     
-    for (const result of testResults.results) {
-      const icon = result.passed ? '✅' : '❌';
-      md += `### ${icon} ${result.testCaseName}\n\n`;
-      md += `- **Status**: ${result.passed ? 'Passed' : 'Failed'}\n`;
-      md += `- **Duration**: ${result.duration.toFixed(2)}s\n`;
-      md += `- **Timestamp**: ${result.timestamp}\n`;
-      
-      if (result.message) {
-        md += `- **Message**: ${result.message}\n`;
-      }
-      
-      if (result.error) {
-        md += `\n**Error Details**:\n\`\`\`\n${result.error}\n\`\`\`\n`;
-      }
-      
-      if (result.logs && result.logs.length > 0) {
-        md += `\n**Logs**:\n`;
-        result.logs.forEach(log => {
-          md += `- ${log}\n`;
-        });
-      }
-      
-      if (result.screenshots && result.screenshots.length > 0) {
-        md += `\n**Screenshots**: ${result.screenshots.length} captured\n`;
-      }
-      
+    // Passed tests (summary only)
+    if (passedResults.length > 0) {
+      md += `### ✅ Passed Tests (${passedResults.length})\n\n`;
+      passedResults.forEach(result => {
+        md += `- **${result.testCaseName}** - ${formatDuration(result.duration)}\n`;
+      });
       md += `\n`;
+    }
+    
+    // Failed tests (app errors - detailed)
+    if (failedResults.length > 0) {
+      md += `### ❌ Failed Tests - Application Errors (${failedResults.length})\n\n`;
+      md += `*These failures indicate issues with the application under test.*\n\n`;
+      
+      for (const result of failedResults) {
+        md += `#### ${result.testCaseName}\n\n`;
+        md += `- **Duration**: ${formatDuration(result.duration)}\n`;
+        
+        if (result.message) {
+          md += `- **Message**: ${result.message}\n`;
+        }
+        
+        if (result.error) {
+          md += `\n**Error Details**:\n\`\`\`\n${result.error}\n\`\`\`\n`;
+        }
+        
+        md += `\n`;
+      }
+    }
+    
+    // Uncertain tests (generation errors - detailed)
+    if (uncertainResults.length > 0) {
+      md += `### ❓ Uncertain Tests - Generation/Configuration Issues (${uncertainResults.length})\n\n`;
+      md += `*These tests could not be executed properly due to test generation issues or missing configuration. These are NOT application bugs.*\n\n`;
+      
+      for (const result of uncertainResults) {
+        md += `#### ${result.testCaseName}\n\n`;
+        md += `- **Duration**: ${formatDuration(result.duration)}\n`;
+        
+        if (result.message) {
+          md += `- **Issue**: ${result.message}\n`;
+        }
+        
+        if (result.error) {
+          md += `- **Details**: ${result.error}\n`;
+        }
+        
+        md += `\n`;
+      }
     }
     
     // Footer

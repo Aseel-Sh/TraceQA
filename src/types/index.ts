@@ -873,6 +873,7 @@ export interface APITestConfig {
   retries?: number;
   retryDelay?: number;
   continueOnFailure?: boolean;
+  acceptableStatuses?: number[];
 }
 
 /**

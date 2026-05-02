@@ -28,6 +28,17 @@ export {
   createWebTester
 } from './web-tester.js';
 
+// Test Normalizer
+export {
+  TestNormalizer,
+  createTestNormalizer
+} from './test-normalizer.js';
+
+export type {
+  NormalizedTest,
+  NormalizationOptions
+} from './test-normalizer.js';
+
 // Re-export testing-related types from types module
 export type {
   // API Testing Types

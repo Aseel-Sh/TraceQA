@@ -3,232 +3,232 @@
     {
       "acceptanceCriterion": "AC-1: A user can register with a valid email and strong password.",
       "generatedTests": [
+        "Valid email and strong password registration",
         "Invalid email format registration",
         "Weak password registration",
-        "Duplicate email registration conflict",
-        "Valid user login",
-        "Invalid login credentials",
-        "Valid user registration"
+        "Duplicate email registration",
+        "Valid credentials login",
+        "Invalid login credentials"
       ],
       "executionResults": [
         {
+          "testId": "TC-001",
+          "testName": "Valid email and strong password registration",
+          "status": "failed",
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Email already registered\"}"
+        },
+        {
           "testId": "TC-002",
           "testName": "Invalid email format registration",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 400}, Request Body: {\"statusCode\":400}, Expected Status: 400, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.05s"
+          "status": "passed",
+          "evidence": "Logs: Response Body: {\"error\":\"Invalid email format\"}"
         },
         {
           "testId": "TC-003",
           "testName": "Weak password registration",
           "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 400}, Request Body: {\"statusCode\":400}, Expected Status: 400, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Password must be at least 8 characters and include uppercase, lowercase, and a number\"}"
         },
         {
           "testId": "TC-004",
-          "testName": "Duplicate email registration conflict",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"error\": \"Duplicate email\"}, Request Body: {\"error\":\"Duplicate email\"}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.02s"
+          "testName": "Duplicate email registration",
+          "status": "passed",
+          "evidence": "Logs: Response Body: {\"error\":\"Email already registered\"}"
         },
         {
           "testId": "TC-005",
-          "testName": "Valid user login",
+          "testName": "Valid credentials login",
           "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 200}, Request Body: {\"statusCode\":200}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.05s"
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Invalid credentials\"}"
         },
         {
           "testId": "TC-006",
           "testName": "Invalid login credentials",
           "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 401}, Request Body: {\"statusCode\":401}, Expected Status: 401, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
-        },
-        {
-          "testId": "TC-001",
-          "testName": "Valid user registration",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 200}, Request Body: {\"statusCode\":200}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Invalid credentials\"}"
         }
       ],
-      "coverage": "none"
+      "coverage": "partial"
     },
     {
       "acceptanceCriterion": "AC-2: Registration rejects invalid email formats.",
       "generatedTests": [
+        "Valid email and strong password registration",
         "Invalid email format registration",
         "Weak password registration",
-        "Duplicate email registration conflict",
-        "Invalid login credentials",
-        "Valid user registration"
+        "Duplicate email registration",
+        "Invalid login credentials"
       ],
       "executionResults": [
         {
+          "testId": "TC-001",
+          "testName": "Valid email and strong password registration",
+          "status": "failed",
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Email already registered\"}"
+        },
+        {
           "testId": "TC-002",
           "testName": "Invalid email format registration",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 400}, Request Body: {\"statusCode\":400}, Expected Status: 400, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.05s"
+          "status": "passed",
+          "evidence": "Logs: Response Body: {\"error\":\"Invalid email format\"}"
         },
         {
           "testId": "TC-003",
           "testName": "Weak password registration",
           "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 400}, Request Body: {\"statusCode\":400}, Expected Status: 400, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Password must be at least 8 characters and include uppercase, lowercase, and a number\"}"
         },
         {
           "testId": "TC-004",
-          "testName": "Duplicate email registration conflict",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"error\": \"Duplicate email\"}, Request Body: {\"error\":\"Duplicate email\"}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.02s"
+          "testName": "Duplicate email registration",
+          "status": "passed",
+          "evidence": "Logs: Response Body: {\"error\":\"Email already registered\"}"
         },
         {
           "testId": "TC-006",
           "testName": "Invalid login credentials",
           "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 401}, Request Body: {\"statusCode\":401}, Expected Status: 401, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
-        },
-        {
-          "testId": "TC-001",
-          "testName": "Valid user registration",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 200}, Request Body: {\"statusCode\":200}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Invalid credentials\"}"
         }
       ],
-      "coverage": "none"
+      "coverage": "partial"
     },
     {
       "acceptanceCriterion": "AC-3: Registration rejects weak passwords.",
       "generatedTests": [
+        "Valid email and strong password registration",
         "Invalid email format registration",
         "Weak password registration",
-        "Duplicate email registration conflict",
-        "Valid user registration"
+        "Duplicate email registration"
       ],
       "executionResults": [
         {
+          "testId": "TC-001",
+          "testName": "Valid email and strong password registration",
+          "status": "failed",
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Email already registered\"}"
+        },
+        {
           "testId": "TC-002",
           "testName": "Invalid email format registration",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 400}, Request Body: {\"statusCode\":400}, Expected Status: 400, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.05s"
+          "status": "passed",
+          "evidence": "Logs: Response Body: {\"error\":\"Invalid email format\"}"
         },
         {
           "testId": "TC-003",
           "testName": "Weak password registration",
           "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 400}, Request Body: {\"statusCode\":400}, Expected Status: 400, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Password must be at least 8 characters and include uppercase, lowercase, and a number\"}"
         },
         {
           "testId": "TC-004",
-          "testName": "Duplicate email registration conflict",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"error\": \"Duplicate email\"}, Request Body: {\"error\":\"Duplicate email\"}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.02s"
-        },
-        {
-          "testId": "TC-001",
-          "testName": "Valid user registration",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 200}, Request Body: {\"statusCode\":200}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
+          "testName": "Duplicate email registration",
+          "status": "passed",
+          "evidence": "Logs: Response Body: {\"error\":\"Email already registered\"}"
         }
       ],
-      "coverage": "none"
+      "coverage": "partial"
     },
     {
       "acceptanceCriterion": "AC-4: Duplicate email registration returns a clear conflict error.",
       "generatedTests": [
+        "Valid email and strong password registration",
         "Invalid email format registration",
         "Weak password registration",
-        "Duplicate email registration conflict",
-        "Valid user registration"
+        "Duplicate email registration"
       ],
       "executionResults": [
         {
+          "testId": "TC-001",
+          "testName": "Valid email and strong password registration",
+          "status": "failed",
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Email already registered\"}"
+        },
+        {
           "testId": "TC-002",
           "testName": "Invalid email format registration",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 400}, Request Body: {\"statusCode\":400}, Expected Status: 400, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.05s"
+          "status": "passed",
+          "evidence": "Logs: Response Body: {\"error\":\"Invalid email format\"}"
         },
         {
           "testId": "TC-003",
           "testName": "Weak password registration",
           "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 400}, Request Body: {\"statusCode\":400}, Expected Status: 400, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Password must be at least 8 characters and include uppercase, lowercase, and a number\"}"
         },
         {
           "testId": "TC-004",
-          "testName": "Duplicate email registration conflict",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"error\": \"Duplicate email\"}, Request Body: {\"error\":\"Duplicate email\"}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.02s"
-        },
-        {
-          "testId": "TC-001",
-          "testName": "Valid user registration",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 200}, Request Body: {\"statusCode\":200}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
+          "testName": "Duplicate email registration",
+          "status": "passed",
+          "evidence": "Logs: Response Body: {\"error\":\"Email already registered\"}"
         }
       ],
-      "coverage": "none"
+      "coverage": "partial"
     },
     {
       "acceptanceCriterion": "AC-5: A registered user can log in with valid credentials.",
       "generatedTests": [
+        "Valid email and strong password registration",
         "Invalid email format registration",
-        "Valid user login",
-        "Invalid login credentials",
-        "Valid user registration"
+        "Valid credentials login",
+        "Invalid login credentials"
       ],
       "executionResults": [
         {
+          "testId": "TC-001",
+          "testName": "Valid email and strong password registration",
+          "status": "failed",
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Email already registered\"}"
+        },
+        {
           "testId": "TC-002",
           "testName": "Invalid email format registration",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 400}, Request Body: {\"statusCode\":400}, Expected Status: 400, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.05s"
+          "status": "passed",
+          "evidence": "Logs: Response Body: {\"error\":\"Invalid email format\"}"
         },
         {
           "testId": "TC-005",
-          "testName": "Valid user login",
+          "testName": "Valid credentials login",
           "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 200}, Request Body: {\"statusCode\":200}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.05s"
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Invalid credentials\"}"
         },
         {
           "testId": "TC-006",
           "testName": "Invalid login credentials",
           "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 401}, Request Body: {\"statusCode\":401}, Expected Status: 401, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
-        },
-        {
-          "testId": "TC-001",
-          "testName": "Valid user registration",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 200}, Request Body: {\"statusCode\":200}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Invalid credentials\"}"
         }
       ],
-      "coverage": "none"
+      "coverage": "partial"
     },
     {
       "acceptanceCriterion": "AC-6: Invalid login credentials are rejected.",
       "generatedTests": [
         "Invalid email format registration",
-        "Valid user login",
+        "Valid credentials login",
         "Invalid login credentials"
       ],
       "executionResults": [
         {
           "testId": "TC-002",
           "testName": "Invalid email format registration",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 400}, Request Body: {\"statusCode\":400}, Expected Status: 400, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.05s"
+          "status": "passed",
+          "evidence": "Logs: Response Body: {\"error\":\"Invalid email format\"}"
         },
         {
           "testId": "TC-005",
-          "testName": "Valid user login",
+          "testName": "Valid credentials login",
           "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 200}, Request Body: {\"statusCode\":200}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.05s"
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Invalid credentials\"}"
         },
         {
           "testId": "TC-006",
           "testName": "Invalid login credentials",
           "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: POST, URL: {\"statusCode\": 401}, Request Body: {\"statusCode\":401}, Expected Status: 401, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
+          "evidence": "Message: API test failed: Assertions failed | Logs: Response Body: {\"error\":\"Invalid credentials\"}"
         }
       ],
-      "coverage": "none"
+      "coverage": "partial"
     },
     {
       "acceptanceCriterion": "AC-7: The health endpoint returns OK.",
@@ -239,14 +239,13 @@
         {
           "testId": "TC-007",
           "testName": "Health endpoint",
-          "status": "failed",
-          "evidence": "Error: API request failed: Invalid URL | API test failed: API request failed: Invalid URL | Logs: Method: GET, URL: {\"status\": \"OK\"}, Expected Status: 200, Actual Status: N/A, Assertion Result: FAIL, Duration: 3.04s"
+          "status": "passed"
         }
       ],
-      "coverage": "none"
+      "coverage": "full"
     }
   ],
   "totalCriteria": 7,
-  "coveredCriteria": 0,
-  "coveragePercentage": 0
+  "coveredCriteria": 7,
+  "coveragePercentage": 100
 }

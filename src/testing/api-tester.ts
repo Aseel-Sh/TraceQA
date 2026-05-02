@@ -61,6 +61,10 @@ export class APITester {
     let retryCount = 0;
     const maxRetries = config.retries ?? this.defaultRetries;
 
+    // Identify non-idempotent HTTP methods that should not be retried after receiving a valid response
+    const nonIdempotentMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
+    const isNonIdempotent = nonIdempotentMethods.includes(config.request.method.toUpperCase());
+
     logger.info(`Executing API test: ${config.name}`);
 
     // Validate URL before attempting request
@@ -98,7 +102,8 @@ export class APITester {
         const assertionResults = await this.runAssertions(
           config.assertions,
           response,
-          config.request
+          config.request,
+          config.acceptableStatuses
         );
 
         const allPassed = assertionResults.every(r => r.passed);
@@ -120,10 +125,20 @@ export class APITester {
           return result;
         }
 
+        // Don't retry non-idempotent methods if we got a valid HTTP response
+        // Only retry on network errors or for idempotent methods (GET, HEAD, OPTIONS)
+        if (isNonIdempotent && response?.status) {
+          logger.warn(
+            `Not retrying ${config.request.method} ${config.request.url} - non-idempotent method received status ${response.status}`
+          );
+          logger.error(`API test failed: ${config.name}`);
+          return result;
+        }
+
         // If not all passed and we have retries left
         if (retryCount < maxRetries) {
-          logger.warn(
-            `API test failed, retrying (${retryCount + 1}/${maxRetries}): ${config.name}`
+          logger.info(
+            `Retrying ${config.request.method} request due to assertion failure (attempt ${retryCount + 1}/${maxRetries}): ${config.name}`
           );
           retryCount++;
           await this.sleep(config.retryDelay || this.defaultRetryDelay);
@@ -135,9 +150,11 @@ export class APITester {
       } catch (error) {
         const duration = Date.now() - startTime;
 
+        // Network errors should be retried even for non-idempotent methods
+        // since the request may not have reached the server
         if (retryCount < maxRetries) {
           logger.warn(
-            `API test error, retrying (${retryCount + 1}/${maxRetries}): ${config.name}: ${error instanceof Error ? error.message : String(error)}`
+            `Retrying ${config.request.method} request due to network error (attempt ${retryCount + 1}/${maxRetries}): ${config.name}: ${error instanceof Error ? error.message : String(error)}`
           );
           retryCount++;
           await this.sleep(config.retryDelay || this.defaultRetryDelay);
@@ -320,13 +337,14 @@ export class APITester {
   private async runAssertions(
     assertions: APIAssertion[],
     response: APIResponse,
-    request: APIRequest
+    request: APIRequest,
+    acceptableStatuses?: number[]
   ): Promise<Array<{ assertion: APIAssertion; passed: boolean; message: string }>> {
     const results: Array<{ assertion: APIAssertion; passed: boolean; message: string }> = [];
 
     for (const assertion of assertions) {
       try {
-        const result = await this.runAssertion(assertion, response, request);
+        const result = await this.runAssertion(assertion, response, request, acceptableStatuses);
         results.push(result);
 
         if (result.passed) {
@@ -353,17 +371,23 @@ export class APITester {
   private async runAssertion(
     assertion: APIAssertion,
     response: APIResponse,
-    _request: APIRequest
+    _request: APIRequest,
+    acceptableStatuses?: number[]
   ): Promise<{ assertion: APIAssertion; passed: boolean; message: string }> {
     let passed = false;
     let message = '';
 
     switch (assertion.type) {
       case AssertionType.STATUS_CODE:
-        passed = response.status === assertion.expected;
+        // Use acceptableStatuses if provided, otherwise fall back to assertion.expected
+        const statusesToCheck = acceptableStatuses && acceptableStatuses.length > 0
+          ? acceptableStatuses
+          : (assertion.expected ? [assertion.expected as number] : [200]);
+        
+        passed = statusesToCheck.includes(response.status);
         message = passed
-          ? `Status code is ${response.status}`
-          : `Expected status ${assertion.expected}, got ${response.status}`;
+          ? `Status ${response.status} is acceptable (expected one of: ${statusesToCheck.join(', ')})`
+          : `Expected status to be one of [${statusesToCheck.join(', ')}], but got ${response.status}`;
         break;
 
       case AssertionType.HEADER:

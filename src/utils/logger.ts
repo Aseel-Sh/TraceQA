@@ -338,4 +338,19 @@ export const warn = (message: string, details?: string) => logger.warn(message, 
 export const info = (message: string, details?: string) => logger.info(message, details);
 export const debug = (message: string, data?: unknown) => logger.debug(message, data);
 
+/**
+ * Format duration consistently across the codebase
+ * - If duration < 1000ms: show as "XXXms" (rounded to nearest integer)
+ * - If duration >= 1000ms: show as "X.XXXs" (3 decimal places)
+ * @param durationMs Duration in milliseconds
+ * @returns Formatted duration string (e.g., "47ms", "3.047s")
+ */
+export function formatDuration(durationMs: number): string {
+  if (durationMs < 1000) {
+    return `${Math.round(durationMs)}ms`;
+  } else {
+    return `${(durationMs / 1000).toFixed(3)}s`;
+  }
+}
+
 // Made with Bob
