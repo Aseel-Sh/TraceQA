@@ -21,7 +21,7 @@ import {
   QATaskPlan,
   TraceQAConfig,
 } from '../types/index.js';
-import { matchRouteToTask, detectResourceAndAction } from '../validation/route-matcher.js';
+import { detectResourceAndAction } from '../validation/route-matcher.js';
 import { logger } from '../utils/logger.js';
 import { extractJSON, safeExtractJSON } from '../utils/json-extractor.js';
 import * as fs from 'fs';
@@ -44,30 +44,6 @@ export interface ProjectContext {
   projectName: string;
   framework?: string;
   openApiSpec?: any;
-}
-
-/**
- * IBM response structure for task plan
- */
-interface IBMTaskPlanResponse {
-  tasks: Array<{
-    taskId: string;
-    acceptanceCriterionId: string;
-    title: string;
-    type: 'api' | 'ui' | 'integration' | 'manual' | 'uncertain';
-    executionMode: 'automated' | 'manual' | 'uncertain';
-    priority?: 'high' | 'medium' | 'low';
-    reasoning: string;
-    uncertainReason?: string;
-    preconditions?: string[];
-    setupData?: Record<string, any>;
-    steps?: Array<{
-      action: string;
-      description: string;
-      expectedOutcome?: string;
-    }>;
-    expectedResult?: string;
-  }>;
 }
 
 /**
@@ -321,7 +297,7 @@ export function generateFallbackTasks(
     const combinedText = criterion.description;
 
     // Detect resource and action from criterion
-    const { resource, action } = detectResourceAndAction(combinedText);
+    const { action } = detectResourceAndAction(combinedText);
 
     // Determine task type based on criterion text and routes
     let type: QATask['type'] = 'uncertain';

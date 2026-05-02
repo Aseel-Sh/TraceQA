@@ -430,7 +430,7 @@ function generateFieldValue(
  * Generate email value based on scenario
  */
 function generateEmailValue(
-  fieldName: string,
+  _fieldName: string,
   scenario: BodyScenario,
   testId: string,
   timestamp: string
@@ -444,7 +444,7 @@ function generateEmailValue(
 /**
  * Generate password value based on scenario
  */
-function generatePasswordValue(fieldName: string, scenario: BodyScenario): string {
+function generatePasswordValue(_fieldName: string, scenario: BodyScenario): string {
   if (scenario === 'weak_password') {
     return 'weak';
   }
@@ -459,9 +459,9 @@ function generatePasswordValue(fieldName: string, scenario: BodyScenario): strin
  */
 function generateStringValue(
   fieldName: string,
-  scenario: BodyScenario,
+  _scenario: BodyScenario,
   testId: string,
-  timestamp: string
+  _timestamp: string
 ): string {
   const fieldLower = fieldName.toLowerCase();
 
@@ -829,7 +829,7 @@ function generateGenericFallback(
 export function validateGeneratedBody(
   body: Record<string, any> | null,
   method: string,
-  route: DiscoveredRoute | null
+  _route: DiscoveredRoute | null
 ): string[] {
   const warnings: string[] = [];
 

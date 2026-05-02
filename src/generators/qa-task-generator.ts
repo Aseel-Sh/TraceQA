@@ -6,7 +6,6 @@ import {
   HTTPTestStep,
   AcceptanceCriterion,
   DiscoveredRoute,
-  TestStatus
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -14,11 +13,9 @@ import { logger } from '../utils/logger.js';
  * Generates deterministic QA task plans from acceptance criteria and AI suggestions
  */
 export class QATaskGenerator {
-  private baseUrl: string;
   private routes: DiscoveredRoute[];
   
-  constructor(baseUrl: string, routes: DiscoveredRoute[]) {
-    this.baseUrl = baseUrl;
+  constructor(_baseUrl: string, routes: DiscoveredRoute[]) {
     this.routes = routes;
   }
 
@@ -171,8 +168,6 @@ export class QATaskGenerator {
     const criterionText = criterion.description.toLowerCase();
     
     for (const route of this.routes) {
-      const routeText = `${route.method} ${route.path} ${route.description || ''}`.toLowerCase();
-      
       // Simple keyword matching
       if (criterionText.includes(route.path.toLowerCase()) ||
           (route.description && criterionText.includes(route.description.toLowerCase()))) {
@@ -229,8 +224,8 @@ export class HTTPTestGenerator {
   private baseUrl: string;
   private routes: DiscoveredRoute[];
   
-  constructor(baseUrl: string, routes: DiscoveredRoute[]) {
-    this.baseUrl = baseUrl;
+  constructor(_baseUrl: string, routes: DiscoveredRoute[]) {
+    this.baseUrl = _baseUrl;
     this.routes = routes;
   }
 
@@ -329,7 +324,7 @@ export class HTTPTestGenerator {
     steps.push({
       stepId,
       description: task.steps[0]?.description || `Test ${route.method} ${route.path}`,
-      method: route.method,
+      method: route.method as HTTPTestStep['method'],
       url,
       headers: { 'Content-Type': 'application/json' },
       body,

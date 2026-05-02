@@ -337,7 +337,7 @@ async function executeWithRetry(
 async function executeHTTPStep(
   step: HTTPTestStep,
   config: TraceQAConfig,
-  previousStepResults: HTTPStepResult[]
+  _previousStepResults: HTTPStepResult[]
 ): Promise<HTTPStepResult> {
   logger.debug(`Executing step: ${step.description}`);
   

@@ -198,7 +198,7 @@ setupExceptionHandlers();
 export { runCLI } from './cli/index.js';
 export { logger } from './utils/logger.js';
 export * from './types/index.js';
-export * from './reporting/index.js';
+export { ReportGenerator, generateReport } from './reporting/index.js';
 export * from './config/index.js';
 
 // Run main if this is the entry point

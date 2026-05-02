@@ -7,7 +7,6 @@ import {
   AssertionType,
   QATaskPlan,
   GeneratedHTTPTestSuite,
-  GeneratedHTTPTest
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 

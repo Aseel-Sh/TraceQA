@@ -372,7 +372,7 @@ function normalizeUrl(url: string, baseUrl: string): string {
 function inferExpectedStatuses(
   method: string,
   context: string,
-  openApiSpec?: any
+  _openApiSpec?: any
 ): { expectedStatus: number; acceptableStatuses: number[] } {
   const methodUpper = method.toUpperCase();
   const contextLower = context.toLowerCase();
