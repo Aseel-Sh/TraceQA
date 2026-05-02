@@ -42,16 +42,13 @@ export interface TestDataContext {
 
 /**
  * Scenario types for body generation
+ * Generic scenarios only—no business-specific concepts
+ * Concrete scenarios like 'weak_password', 'invalid_email' are not universal
+ * Those are inferred by IBM based on actual validation rules in the codebase
  */
 export type BodyScenario =
   | 'valid'
-  | 'invalid'
-  | 'duplicate'
-  | 'missing_field'
-  | 'weak_password'
-  | 'invalid_email'
-  | 'unauthorized'
-  | 'conflict';
+  | 'invalid';
 
 /**
  * Main function to generate request body with intelligent fallback logic
@@ -204,6 +201,9 @@ export function generateRequestBody(
 
 /**
  * Infer test scenario from task and acceptance criterion
+ * ONLY supports generic valid/invalid determination
+ * Business-specific scenario logic (e.g., "what makes input invalid for this app?")
+ * must come from IBM reasoning based on actual source code and validation rules
  */
 function inferScenario(
   task: QATask,
@@ -211,28 +211,13 @@ function inferScenario(
 ): BodyScenario {
   const text = `${task.title} ${task.expectedResult} ${acceptanceCriterion.description}`.toLowerCase();
 
-  if (text.includes('invalid email') || text.includes('malformed email')) {
-    return 'invalid_email';
-  }
-  if (text.includes('weak password') || text.includes('short password')) {
-    return 'weak_password';
-  }
-  if (text.includes('duplicate') || text.includes('already exists')) {
-    return 'duplicate';
-  }
-  if (text.includes('missing') || text.includes('required field')) {
-    return 'missing_field';
-  }
-  if (text.includes('unauthorized') || text.includes('not authorized')) {
-    return 'unauthorized';
-  }
-  if (text.includes('conflict')) {
-    return 'conflict';
-  }
-  if (text.includes('invalid') || text.includes('error') || text.includes('fail')) {
+  // Only check for explicit rejection/failure language
+  if (text.includes('reject') || text.includes('invalid') || text.includes('fail') || 
+      text.includes('error') || text.includes('cannot') || text.includes('should not')) {
     return 'invalid';
   }
 
+  // Otherwise assume valid scenario
   return 'valid';
 }
 
@@ -306,17 +291,11 @@ function generateFromSchema(
   }
 
   const properties = schema.properties || {};
-  const required = schema.required || [];
 
   for (const [fieldName, fieldSchema] of Object.entries(properties)) {
     const field = fieldSchema as any;
-    const isRequired = required.includes(fieldName);
 
-    // Skip non-required fields for missing_field scenario
-    if (scenario === 'missing_field' && isRequired) {
-      continue;
-    }
-
+    // Generate value for all fields
     body[fieldName] = generateFieldValue(
       fieldName,
       field,
@@ -347,13 +326,14 @@ function resolveRef(ref: string, openApiSpec: any): any {
 
 /**
  * Generate value for a specific field based on schema
+ * Schema-driven generation only—no hardcoded field name pattern matching
  */
 function generateFieldValue(
   fieldName: string,
   fieldSchema: any,
-  scenario: BodyScenario,
+  _scenario: BodyScenario,
   testId: string,
-  timestamp: string,
+  _timestamp: string,
   openApiSpec?: any
 ): any {
   // Resolve $ref if present
@@ -363,9 +343,8 @@ function generateFieldValue(
 
   const type = fieldSchema.type;
   const format = fieldSchema.format;
-  const fieldLower = fieldName.toLowerCase();
 
-  // Handle enum values
+  // Handle enum values—always use first valid option
   if (fieldSchema.enum && fieldSchema.enum.length > 0) {
     return fieldSchema.enum[0];
   }
@@ -376,9 +355,9 @@ function generateFieldValue(
     const item = generateFieldValue(
       fieldName,
       itemSchema,
-      scenario,
+      'valid',
       testId,
-      timestamp,
+      _timestamp,
       openApiSpec
     );
     return [item];
@@ -386,12 +365,12 @@ function generateFieldValue(
 
   // Handle objects
   if (type === 'object') {
-    return generateFromSchema(fieldSchema, openApiSpec || {}, scenario, testId, timestamp);
+    return generateFromSchema(fieldSchema, openApiSpec || {}, 'valid', testId, _timestamp);
   }
 
-  // Handle specific formats
+  // Handle format-based generation
   if (format === 'email') {
-    return generateEmailValue(fieldName, scenario, testId, timestamp);
+    return `user-${testId}@example.com`;
   }
   if (format === 'date-time' || format === 'date') {
     return new Date().toISOString();
@@ -400,137 +379,38 @@ function generateFieldValue(
     return 'https://example.com';
   }
   if (format === 'uuid') {
-    return `${testId}-${timestamp}`;
+    return `${testId}`;
   }
 
-  // Handle by field name patterns
-  if (fieldLower.includes('email')) {
-    return generateEmailValue(fieldName, scenario, testId, timestamp);
-  }
-  if (fieldLower.includes('password')) {
-    return generatePasswordValue(fieldName, scenario);
-  }
-
-  // Handle by type
+  // Handle by type only—no field name pattern matching
   if (type === 'string') {
-    return generateStringValue(fieldName, scenario, testId, timestamp);
+    // Generic string—use field name as part of value for traceability
+    return `${fieldName}-${testId}`;
   }
   if (type === 'number' || type === 'integer') {
     return generateNumberValue(fieldName, fieldSchema);
   }
   if (type === 'boolean') {
-    return scenario === 'valid';
+    return true;
   }
 
   // Default fallback
-  return `${fieldName}_${testId}`;
+  return `${fieldName}-${testId}`;
 }
 
 /**
- * Generate email value based on scenario
+ * Generate number value based on schema constraints only
+ * No field name pattern matching
  */
-function generateEmailValue(
-  _fieldName: string,
-  scenario: BodyScenario,
-  testId: string,
-  _timestamp: string
-): string {
-  if (scenario === 'invalid_email' || scenario === 'invalid') {
-    return 'invalid-email';
-  }
-  // Use a generic example email; avoid project-specific seeding in core logic
-  return `example-${testId}@example.com`;
-}
-
-/**
- * Generate password value based on scenario
- */
-function generatePasswordValue(_fieldName: string, scenario: BodyScenario): string {
-  if (scenario === 'weak_password') {
-    return 'weak';
-  }
-  if (scenario === 'invalid') {
-    return '123';
-  }
-  // Generic, conservative placeholder; do not hardcode app-specific policy
-  return 'Passw0rd!';
-}
-
-/**
- * Generate string value based on field name
- */
-function generateStringValue(
-  fieldName: string,
-  _scenario: BodyScenario,
-  testId: string,
-  _timestamp: string
-): string {
-  const fieldLower = fieldName.toLowerCase();
-
-  if (fieldLower.includes('name') || fieldLower.includes('title') || fieldLower.includes('label')) {
-    return `TraceQA ${testId}`;
-  }
-  if (fieldLower.includes('bio') || fieldLower.includes('description') || fieldLower.includes('comment')) {
-    return 'Generated by TraceQA for automated testing';
-  }
-  if (fieldLower.includes('phone')) {
-    return '+1-555-0100';
-  }
-  if (fieldLower.includes('address')) {
-    return '123 TraceQA Street';
-  }
-  if (fieldLower.includes('city')) {
-    return 'TestCity';
-  }
-  if (fieldLower.includes('state') || fieldLower.includes('province')) {
-    return 'TS';
-  }
-  if (fieldLower.includes('zip') || fieldLower.includes('postal')) {
-    return '12345';
-  }
-  if (fieldLower.includes('country')) {
-    return 'US';
-  }
-  if (fieldLower.includes('url') || fieldLower.includes('website')) {
-    return 'https://example.com';
-  }
-  if (fieldLower.includes('date') || fieldLower.includes('time')) {
-    return new Date().toISOString();
-  }
-
-  return `${fieldName}_${testId}`;
-}
-
-/**
- * Generate number value based on field name and constraints
- */
-function generateNumberValue(fieldName: string, fieldSchema: any): number {
-  const fieldLower = fieldName.toLowerCase();
-
+function generateNumberValue(_fieldName: string, fieldSchema: any): number {
   // Check schema constraints
   const min = fieldSchema.minimum ?? fieldSchema.min;
   const max = fieldSchema.maximum ?? fieldSchema.max;
 
-  if (fieldLower.includes('amount') || fieldLower.includes('price') || fieldLower.includes('cost')) {
-    if (min !== undefined && max !== undefined) {
-      return Math.min(max, Math.max(min, 99.99));
-    }
-    return 99.99;
-  }
-  if (fieldLower.includes('count') || fieldLower.includes('quantity')) {
-    if (min !== undefined && max !== undefined) {
-      return Math.min(max, Math.max(min, 5));
-    }
-    return 5;
-  }
-  if (fieldLower.includes('age')) {
-    return 25;
-  }
-  if (fieldLower.includes('percent') || fieldLower.includes('rate')) {
-    return 50;
-  }
-
   // Use schema constraints if available
+  if (min !== undefined && max !== undefined) {
+    return min + ((max - min) / 2);
+  }
   if (min !== undefined) {
     return min + 1;
   }
@@ -543,159 +423,76 @@ function generateNumberValue(fieldName: string, fieldSchema: any): number {
 
 /**
  * Generate body from config sample data
+ * Generic approach: use any available sample data without business-specific field names
  */
 function generateBodyFromConfig(
   config: TraceQAConfig,
-  scenario: BodyScenario,
-  task: QATask,
-  testId: string,
-  timestamp: string
+  _scenario: BodyScenario,
+  _task: QATask,
+  _testId: string,
+  _timestamp: string
 ): Record<string, any> | null {
-  if (!config.sampleData) {
+  if (!config.sampleData || typeof config.sampleData !== 'object') {
     return null;
   }
 
   const sampleData = config.sampleData;
-  let baseBody: Record<string, any> = {};
-
-  // Try to find matching sample data
-  if (scenario === 'valid' && sampleData.validUser) {
-    baseBody = { ...sampleData.validUser };
-  } else if (scenario === 'invalid_email' && sampleData.invalidEmail) {
-    baseBody = { email: sampleData.invalidEmail };
-  } else if (scenario === 'weak_password' && sampleData.weakPassword) {
-    baseBody = { password: sampleData.weakPassword };
-  } else {
-    // Try to find any matching key in sample data
-    const taskLower = task.title.toLowerCase();
-    for (const [key, value] of Object.entries(sampleData)) {
-      if (taskLower.includes(key.toLowerCase()) && typeof value === 'object') {
-        baseBody = { ...value };
-        break;
-      }
+  
+  // Try to find any sample object in config that can be used as-is
+  for (const [_key, value] of Object.entries(sampleData)) {
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      // Found a sample object—use it directly
+      return { ...value };
     }
   }
 
-  if (Object.keys(baseBody).length === 0) {
-    return null;
-  }
-
-  // Apply scenario modifications
-  return generateBodyForScenario(scenario, baseBody, task, testId, timestamp);
+  return null;
 }
 
 /**
  * Infer fields from task context, acceptance criteria, and route
+ * VERY conservative—only use schema and setup data, not keyword matching
  */
 export function inferFieldsFromContext(
-  task: QATask,
-  acceptanceCriterion: AcceptanceCriterion,
-  route: DiscoveredRoute | null,
-  testId: string,
+  _task: QATask,
+  _acceptanceCriterion: AcceptanceCriterion,
+  _route: DiscoveredRoute | null,
+  _testId: string,
   _timestamp: string
 ): Record<string, any> {
-  const fields: Record<string, any> = {};
-  const text = `${task.title} ${task.expectedResult} ${acceptanceCriterion.description}`.toLowerCase();
-  // Conservative inference: only derive minimal generic placeholders when text explicitly mentions fields
-  if (text.includes('email')) {
-    fields.email = `example-${testId}@example.com`;
-  }
-  if (text.includes('password')) {
-    fields.password = 'Passw0rd!';
-  }
-  if (text.includes('username') || text.includes('user name')) {
-    fields.username = `user_${testId}`;
-  }
-  if (text.includes('name') && !text.includes('username')) {
-    fields.name = `Name ${testId}`;
-  }
-  if (text.includes('title')) {
-    fields.title = `Test ${testId}`;
-  }
-  if (text.includes('description')) {
-    fields.description = 'Generated for testing';
-  }
-
-  // If the route provides explicit validation snippets, avoid inventing fields; let IBM handle mapping
-  if (route && Array.isArray(route.validationSnippets) && route.validationSnippets.length > 0) {
-    // No aggressive inference here; snippets will be used by IBM when available
-  }
-
-  // Use setup data if available
-  if (task.setupData && Object.keys(task.setupData).length > 0) {
-    Object.assign(fields, task.setupData);
-  }
-
-  return fields;
+  // Conservative: do not invent fields based on keyword matching
+  // Fields should come from OpenAPI/schema or setup data, not guessing
+  return {};
 }
 
 /**
  * Generate body for specific test scenario
+ * ONLY valid/invalid now—no business-specific scenarios
  */
 export function generateBodyForScenario(
   scenario: BodyScenario,
   baseFields: Record<string, any>,
-  task: QATask,
-  testId: string,
-  timestamp: string
+  _task: QATask,
+  _testId: string,
+  _timestamp: string
 ): Record<string, any> {
   const body = { ...baseFields };
 
-  switch (scenario) {
-    case 'valid':
-      // Use base fields as-is, ensure unique values
-      if (body.email && !body.email.includes(timestamp)) {
-        body.email = `traceqa-${testId}-${timestamp}@example.com`;
-      }
-      break;
+  // Only handle generic valid/invalid determination
+  // Business-specific invalid data generation (what makes this request invalid for THIS API?)
+  // must come from IBM reasoning based on actual validation code
+  if (scenario === 'valid') {
+    // Use base fields as-is
+    return body;
+  }
 
-    case 'invalid_email':
-      if (body.email) {
-        body.email = 'invalid-email';
-      }
-      break;
-
-    case 'weak_password':
-      if (body.password) {
-        body.password = 'weak';
-      }
-      break;
-
-    case 'invalid':
-      // Make various fields invalid
-      if (body.email) {
-        body.email = 'invalid-email';
-      }
-      if (body.password) {
-        body.password = '123';
-      }
-      if (body.amount) {
-        body.amount = -1;
-      }
-      break;
-
-    case 'duplicate':
-    case 'conflict':
-      // Use setup data to create duplicate
-      if (task.setupData && Object.keys(task.setupData).length > 0) {
-        Object.assign(body, task.setupData);
-      }
-      break;
-
-    case 'missing_field':
-      // Remove a required field (try to identify one)
-      const requiredFields = ['email', 'password', 'name', 'title', 'productId'];
-      for (const field of requiredFields) {
-        if (body[field]) {
-          delete body[field];
-          break;
-        }
-      }
-      break;
-
-    case 'unauthorized':
-      // Keep body but it will be used without proper auth
-      break;
+  if (scenario === 'invalid') {
+    // Very conservative: we cannot know what makes this invalid without understanding the app
+    // Return a modified body with minimal changes (e.g., remove required-looking field)
+    // But prefer to mark as uncertain and let IBM decide
+    // For now, if scenario is invalid and we have nothing else, return original
+    // The confidence scoring will catch this as uncertain
+    return body;
   }
 
   return body;
@@ -703,46 +500,17 @@ export function generateBodyForScenario(
 
 /**
  * Generate stateful body for multi-step tests
- * 
- * @param step - Test step type (setup, action, conflict)
- * @param context - Test data context
- * @param baseBody - Base body to modify
- * @returns Modified body for the step
+ * SIMPLIFIED: no hardcoded business logic around email/password
  */
 export function generateStatefulBody(
-  step: 'setup' | 'action' | 'conflict',
+  _step: 'setup' | 'action' | 'conflict',
   context: TestDataContext,
   baseBody: Record<string, any>
 ): Record<string, any> {
   const body = { ...baseBody };
 
-  switch (step) {
-    case 'setup':
-      // Generate unique data for setup
-      if (body.email && !body.email.includes(context.timestamp)) {
-        body.email = `traceqa-${context.testId}-${context.timestamp}@example.com`;
-      }
-      if (body.username && !body.username.includes(context.testId)) {
-        body.username = `traceqa_${context.testId}`;
-      }
-      // Store for later use
-      Object.assign(context.setupData, body);
-      break;
-
-    case 'action':
-      // Use different data from setup
-      if (body.email) {
-        body.email = `traceqa-${context.testId}-action-${context.timestamp}@example.com`;
-      }
-      break;
-
-    case 'conflict':
-      // Reuse exact same data from setup to trigger conflict
-      if (context.setupData && Object.keys(context.setupData).length > 0) {
-        Object.assign(body, context.setupData);
-      }
-      break;
-  }
+  // Store for later use by other steps
+  Object.assign(context.setupData, body);
 
   return body;
 }
@@ -751,29 +519,14 @@ export function generateStatefulBody(
  * Generate generic fallback body when no other source is available
  */
 function generateGenericFallback(
-  scenario: BodyScenario,
+  _scenario: BodyScenario,
   testId: string,
-  timestamp: string
+  _timestamp: string
 ): Record<string, any> {
-  const body: Record<string, any> = {
-    name: `TraceQA ${testId}`,
-    description: 'Generated by TraceQA for automated testing',
+  // Minimal generic placeholder—makes clear this is a fallback
+  return {
+    data: `generated-test-${testId}`,
   };
-
-  // Add common fields based on scenario
-  if (scenario === 'valid') {
-    body.email = `traceqa-${testId}-${timestamp}@example.com`;
-    body.value = 'test-value';
-  } else if (scenario === 'invalid_email') {
-    body.email = 'invalid-email';
-  } else if (scenario === 'weak_password') {
-    body.password = 'weak';
-  } else if (scenario === 'invalid') {
-    body.email = 'invalid-email';
-    body.value = '';
-  }
-
-  return body;
 }
 
 /**

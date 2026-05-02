@@ -56,25 +56,30 @@ function extractUrl(step: string): string {
 
 /**
  * Extract expected status code from test step
+ * EVIDENCE-BASED: look for explicit status codes first
+ * Fallback to generic HTTP semantics (not business-specific keywords)
  */
 function extractExpectedStatus(step: string): number {
-  // Look for explicit status codes
+  // Look for explicit status codes first
   const statusMatch = step.match(/\b(200|201|204|400|401|403|404|409|422|500)\b/);
   if (statusMatch) {
     return parseInt(statusMatch[1]);
   }
   
-  // Infer from keywords
+  // Fallback to generic HTTP semantics only
   const lowerStep = step.toLowerCase();
-  if (lowerStep.includes('created') || lowerStep.includes('create')) return 201;
-  if (lowerStep.includes('no content')) return 204;
+  
+  // Success
+  if (lowerStep.includes('created')) return 201;
+  if (lowerStep.includes('no content') || lowerStep.includes('deleted')) return 204;
+  
+  // Client errors - generic
   if (lowerStep.includes('bad request') || lowerStep.includes('invalid')) return 400;
-  if (lowerStep.includes('unauthorized') || lowerStep.includes('not authenticated')) return 401;
-  if (lowerStep.includes('forbidden')) return 403;
+  if (lowerStep.includes('forbidden') || lowerStep.includes('not allowed')) return 403;
   if (lowerStep.includes('not found')) return 404;
-  if (lowerStep.includes('conflict') || lowerStep.includes('duplicate')) return 409;
-  if (lowerStep.includes('validation') || lowerStep.includes('unprocessable')) return 422;
-  if (lowerStep.includes('error') || lowerStep.includes('fail')) return 500;
+  
+  // Server errors - only for catastrophic failures
+  if (lowerStep.includes('server error') || lowerStep.includes('internal error')) return 500;
   
   return 200; // default success
 }

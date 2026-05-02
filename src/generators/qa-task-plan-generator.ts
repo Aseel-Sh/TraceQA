@@ -77,7 +77,18 @@ export function buildQATaskPlanPrompt(
     ? `\n\nOpenAPI Specification Available: Yes\nEndpoints: ${Object.keys(projectContext.openApiSpec.paths || {}).length}`
     : '';
 
-  return `You are a QA engineer analyzing acceptance criteria to create a structured test plan.
+  return `You are a QA engineer analyzing acceptance criteria to create a structured test plan for an ARBITRARY CODEBASE.
+
+CRITICAL: Do not assume specific business logic or domain concepts. Base your analysis ONLY on:
+- The actual acceptance criterion text
+- Discovered routes and their source code
+- OpenAPI/Swagger documentation if available
+
+Do NOT assume or inject:
+- User/authentication/login/registration workflows
+- Email/password concepts
+- Specific field names or business entities
+- Resource types or relationships
 
 Project: ${projectContext.projectName}
 Framework: ${projectContext.framework || 'Unknown'}${openApiInfo}
@@ -92,38 +103,39 @@ Task: Create a QA task plan by mapping each acceptance criterion to one or more 
 
 For each task, determine:
 1. **Task Type**: Classify as one of:
-   - api: Can be tested via API calls (use when routes are discovered and criterion mentions API/endpoints)
+   - api: Can be tested via API calls (use when routes are discovered and criterion is API/endpoint-related)
    - ui: Requires browser interaction (use when criterion mentions UI/pages/buttons)
    - integration: Requires multiple systems (use when criterion mentions external services)
    - manual: Cannot be automated (use when criterion requires human judgment)
-   - uncertain: Cannot determine with confidence (use when unclear)
+   - uncertain: Cannot determine with confidence (use when unclear or no matching routes)
 
 2. **Execution Mode**: Classify as:
-   - automated: Can be fully automated
-   - manual: Requires human execution
+   - automated: Can be fully automated (all dependencies known, clear test path)
+   - manual: Requires human execution (inherent to criterion or app design)
    - uncertain: Cannot determine with confidence
 
 3. **Priority**: Based on acceptance criterion priority and testability:
-   - high: Critical functionality with clear automation path
-   - medium: Important functionality or partial automation
-   - low: Nice-to-have or manual-only tests
+   - high: Critical functionality with clear test path
+   - medium: Important functionality or unclear test path
+   - low: Nice-to-have or manual-only
 
-4. **Reasoning**: Explain why you chose this classification (2-3 sentences)
+4. **Reasoning**: Explain your classification (2-3 sentences). Cite discovered routes and criterion text.
 
 5. **Uncertain Reason**: If type or executionMode is 'uncertain', explain why (required for uncertain tasks)
 
-6. **Test Steps**: Suggest 2-5 concrete test steps
+6. **Test Steps**: Suggest 2-5 concrete test steps based on discovered routes
 
-7. **Preconditions**: List any setup requirements (e.g., "User must be logged in")
+7. **Preconditions**: List setup requirements from code evidence, not assumptions
 
-8. **Setup Data**: Suggest test data needed (e.g., valid email, test user credentials)
+8. **Setup Data**: Suggest generic test data (not domain-specific field names)
 
 IMPORTANT GUIDELINES:
-- Be conservative: Mark as 'uncertain' when confidence is low
+- Be conservative: Mark as 'uncertain' if confidence is low
 - Match routes to criteria: Use discovered routes to inform task type
-- One task per criterion minimum: Each criterion should have at least one task
-- Provide clear reasoning: Explain your classification decisions
-- Consider dependencies: Note if tasks require other tasks to run first
+- Generic test data: Use placeholder names (e.g., "test_value", "test_string") not domain-specific (e.g., "validEmail", "password")
+- One task per criterion minimum
+- Provide reasoning that cites routes and criterion text
+- Consider dependencies only if discoverable from route interactions
 
 Return ONLY a valid JSON object with this exact structure (no markdown, no explanations):
 {
@@ -131,29 +143,29 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no expla
     {
       "taskId": "QA-001",
       "acceptanceCriterionId": "AC-1",
-      "title": "Test user registration with valid email",
+      "title": "Test endpoint behavior with valid data",
       "type": "api",
       "executionMode": "automated",
       "priority": "high",
-      "reasoning": "Clear API endpoint discovered (POST /api/users/register). Acceptance criterion specifies testable validation rules. High confidence in automation.",
-      "preconditions": ["Database is accessible", "Email service is mocked"],
+      "reasoning": "Route POST /api/endpoint discovered. Acceptance criterion describes expected behavior. Setup requirements minimal.",
+      "preconditions": ["Endpoint is accessible", "Database initialized"],
       "setupData": {
-        "validEmail": "test@example.com",
-        "validPassword": "SecurePass123!"
+        "field1": "test_value_1",
+        "field2": "test_value_2"
       },
       "steps": [
         {
-          "action": "Send POST request to /api/users/register",
-          "description": "Submit registration with valid email and password",
-          "expectedOutcome": "201 Created response with user object"
+          "action": "Send request to endpoint",
+          "description": "Submit valid data structure",
+          "expectedOutcome": "Successful response with 2xx status"
         },
         {
           "action": "Verify response structure",
-          "description": "Check that response contains userId, email, and createdAt",
+          "description": "Check response contains expected fields",
           "expectedOutcome": "All required fields present"
         }
       ],
-      "expectedResult": "User is created successfully with valid data"
+      "expectedResult": "Endpoint accepts valid data and returns expected response"
     }
   ]
 }

@@ -364,23 +364,38 @@ export class HTTPTestGenerator {
   }
 
   /**
-   * Infer expected status from method and task
+   * Infer expected status from method, task, and route code hints
+   * EVIDENCE-BASED: look for status code responses in source code
    */
   private inferExpectedStatus(method: string, task: QATask): number {
     const expectedResult = task.expectedResult.toLowerCase();
     
-    // Check for explicit failure scenarios
-    if (expectedResult.includes('invalid') || expectedResult.includes('error')) {
-      if (expectedResult.includes('unauthorized') || expectedResult.includes('auth')) {
-        return 401;
+    // Try to find a matching route with validation hints
+    const routes = this.routes.filter(r => r.method?.toUpperCase() === method.toUpperCase());
+    
+    // Look for explicit error status codes in validation hints
+    for (const route of routes) {
+      const hints = (route as any)?.validationSnippets || [];
+      const snippet = (route as any)?.sourceSnippet || '';
+      const allCode = (hints.join(' ') + snippet).toLowerCase();
+      
+      // Look for explicit status codes in source code
+      const statusCodeMatch = allCode.match(/(?:status|res.*)\((\d{3})\)|res\.status\((\d{3})\)/);
+      if (statusCodeMatch) {
+        const code = parseInt(statusCodeMatch[1] || statusCodeMatch[2]);
+        if (expectedResult.includes('error') || expectedResult.includes('fail') || expectedResult.includes('invalid')) {
+          if (code >= 400) return code;
+        }
       }
-      if (expectedResult.includes('not found')) {
-        return 404;
-      }
-      if (expectedResult.includes('conflict') || expectedResult.includes('duplicate')) {
-        return 409;
-      }
-      return 400; // Generic validation error
+      
+      // If no explicit code found, use HTTP semantic conventions
+      if (expectedResult.includes('not found')) return 404;
+      if (expectedResult.includes('forbidden') || expectedResult.includes('denied')) return 403;
+    }
+    
+    // Default behavior based on method
+    if (expectedResult.includes('error') || expectedResult.includes('fail') || expectedResult.includes('invalid')) {
+      return 400; // Generic client error
     }
     
     // Success scenarios

@@ -694,9 +694,23 @@ function buildHTTPTestPrompt(
 
   const openApiInfo = buildOpenApiSummary(projectContext.openApiSpec);
 
-  return `You are generating executable HTTP tests from acceptance criteria.
+  return `You are generating executable HTTP tests from acceptance criteria for an arbitrary codebase.
 
 Return STRICT JSON ONLY. Do not return markdown, prose, or code fences.
+
+CRITICAL: Do not assume specific business logic. Do not hardcode assumptions about:
+- user/registration/login/authentication
+- email/password validation rules
+- specific error messages
+- resource names or relationships
+- typical REST conventions
+
+Instead, reason ONLY from:
+- The actual acceptance criterion text
+- Discovered routes and their source code
+- Validation logic visible in code snippets
+- OpenAPI/Swagger specs if available
+- Route method and path patterns
 
 Project type: ${projectContext.projectType || 'unknown'}
 Language: ${projectContext.language || 'unknown'}
@@ -709,17 +723,20 @@ ${acceptanceCriterion.id}: ${acceptanceCriterion.description}
 Task:
 ${task.taskId}: ${task.title}
 
-Discovered routes (include nearby source/validation hints where available):
+Discovered routes (with source code snippets and validation hints):
 ${routesInfo}
 
-When constructing request bodies, prefer the following sources in priority order:
-1) OpenAPI requestBody schema and examples (if provided in the project)
-2) Validation or schema snippets found near the route handler (provided above)
-3) Config-provided sample data
-4) IBM reasoning using the provided acceptance criterion and the route snippets
-5) Generic placeholders only as last-resort low-confidence fallback
+Request body generation priority:
+1) OpenAPI requestBody schema and examples
+2) Validation/schema logic visible in route source code
+3) Generic placeholder based on schema type
+4) Empty body if not required
 
-When you produce bodies, include a short 'confidence' numeric value (0.0 - 1.0) in the test metadata and explain which source you used.
+For each test, explain:
+- Which route(s) satisfy the acceptance criterion
+- What evidence from the code supports this mapping
+- What valid/invalid request data should look like (based on source code hints)
+- What status code and body assertions are justified
 
 Required JSON shape:
 {
@@ -727,20 +744,20 @@ Required JSON shape:
     {
       "id": "TC-001",
       "acceptanceCriterionId": "AC-1",
-      "title": "Human readable title",
-      "reasoning": "Why this test maps to the acceptance criterion.",
-      "confidence": 0.92,
+      "title": "Human readable test title",
+      "reasoning": "Detailed explanation of why this test maps to the acceptance criterion, what code evidence supports it, and what the test validates.",
+      "confidence": 0.85,
       "executionMode": "automated",
       "steps": [
         {
           "stepId": "TC-001-S1",
-          "method": "POST",
-          "path": "/api/example",
-          "url": "${projectContext.baseUrl}/api/example",
+          "method": "GET",
+          "path": "/api/endpoint",
+          "url": "${projectContext.baseUrl}/api/endpoint",
           "headers": { "Content-Type": "application/json" },
-          "body": { "example": "value" },
-          "expectedStatus": 201,
-          "acceptableStatuses": [200, 201],
+          "body": null,
+          "expectedStatus": 200,
+          "acceptableStatuses": [200],
           "expectedBodyContains": []
         }
       ]
@@ -749,17 +766,31 @@ Required JSON shape:
 }
 
 Rules:
-- Use only discovered routes or a clear UNCERTAIN response.
-- Do not invent fake endpoints.
-- If you cannot safely map the criterion to an executable HTTP test, return:
-  { "tests": [{ "id": "TC-001", "acceptanceCriterionId": "${acceptanceCriterion.id}", "title": "${task.title}", "reasoning": "No discovered route appears to handle this behavior.", "confidence": 0.0, "executionMode": "uncertain", "uncertainReason": "No discovered route appears to handle this behavior.", "steps": [] }] }
-- Every automated test must use discovered route paths and absolute or baseUrl-derived URLs.
-- Use JSON bodies for POST, PUT, and PATCH when needed.
-- If confidence is low, set executionMode to uncertain.
-- Do not put objects in url.
-- Keep paths aligned with discovered routes.
+- ONLY use discovered routes. Do NOT invent endpoints.
+- For each test, include detailed 'reasoning' that cites specific code snippets or schema evidence.
+- If the acceptance criterion cannot be tested with discovered routes, return uncertain test:
+  {
+    "tests": [
+      {
+        "id": "TC-001",
+        "acceptanceCriterionId": "${acceptanceCriterion.id}",
+        "title": "${task.title}",
+        "reasoning": "Detailed explanation of why this cannot be tested.",
+        "confidence": 0.0,
+        "executionMode": "uncertain",
+        "uncertainReason": "No discovered route supports this criterion.",
+        "steps": []
+      }
+    ]
+  }
+- HTTP method must match route method (or infer from OpenAPI).
+- URL must be derived from discovered route path.
+- Body must be structurally valid JSON based on schema/hints (not invented).
+- expectedStatus should be justified by route documentation or code hints.
+- Confidence: High when route/schema clearly match; Medium when inference is needed; Low when uncertain.
+- Set executionMode to "uncertain" if confidence < 0.7.
 
-Return ONLY valid JSON.`;
+Return ONLY valid JSON. No markdown, comments, or explanations outside JSON.`;
 }
 
 /**

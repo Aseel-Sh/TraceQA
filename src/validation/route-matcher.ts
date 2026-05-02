@@ -45,12 +45,14 @@ export interface ValidationResult {
  */
 export interface ResourceAction {
   resource: string | null;
-  action: 'create' | 'read' | 'update' | 'delete' | 'list' | 'health' | 'auth' | null;
+  action: 'create' | 'read' | 'update' | 'delete' | 'list' | null;
   keywords: string[];
 }
 
 /**
  * HTTP method mapping for different action types
+ * Does NOT include hardcoded action types like 'auth' or 'health'
+ * Those should be inferred from actual routes and IBM reasoning
  */
 const ACTION_TO_METHOD_MAP: Record<string, string[]> = {
   create: ['POST'],
@@ -58,43 +60,20 @@ const ACTION_TO_METHOD_MAP: Record<string, string[]> = {
   update: ['PUT', 'PATCH'],
   delete: ['DELETE'],
   list: ['GET'],
-  health: ['GET'],
-  auth: ['POST'],
 };
 
 /**
- * Action verb patterns for detecting CRUD operations
+ * Action verb patterns for detecting generic CRUD operations
+ * Intentionally avoids business-specific keywords like 'login', 'register', 'auth', 'token'
+ * Those concepts are handled by IBM reasoning, not hardcoded patterns
  */
 const ACTION_PATTERNS = {
-  create: /\b(create|register|add|submit|post|sign\s*up|new)\b/i,
-  read: /\b(get|retrieve|fetch|view|list|read|show|display|check)\b/i,
+  create: /\b(create|add|submit|post|new)\b/i,
+  read: /\b(get|retrieve|fetch|view|check|show)\b/i,
   update: /\b(update|edit|modify|change|patch|put)\b/i,
   delete: /\b(delete|remove|destroy)\b/i,
-  list: /\b(list|all|index|collection)\b/i,
-  health: /\b(health|status|ping|alive|ready|liveness|readiness)\b/i,
-  auth: /\b(login|authenticate|sign\s*in|auth|token|session)\b/i,
+  list: /\b(list|all|index|collection|retrieve\s+all)\b/i,
 };
-
-/**
- * Common REST resource patterns
- */
-const RESOURCE_PATTERNS = [
-  /\b(user|account|profile|member)s?\b/i,
-  /\b(order|purchase|transaction)s?\b/i,
-  /\b(product|item|article)s?\b/i,
-  /\b(invoice|bill|receipt)s?\b/i,
-  /\b(appointment|booking|reservation)s?\b/i,
-  /\b(task|todo|job)s?\b/i,
-  /\b(payment|charge|refund)s?\b/i,
-  /\b(comment|review|feedback)s?\b/i,
-  /\b(post|article|blog)s?\b/i,
-  /\b(message|notification|alert)s?\b/i,
-  /\b(file|document|attachment)s?\b/i,
-  /\b(category|tag|label)s?\b/i,
-  /\b(customer|client|contact)s?\b/i,
-  /\b(employee|staff|worker)s?\b/i,
-  /\b(report|analytics|metric)s?\b/i,
-];
 
 /**
  * Extract keywords from text by tokenizing and filtering
@@ -116,24 +95,26 @@ function extractKeywords(text: string): string[] {
 }
 
 /**
- * Detect resource and action from text using generic patterns
+ * Detect action from text using generic CRUD patterns only
+ * Does NOT attempt to detect business-specific actions like 'auth', 'health', etc.
+ * Those require inspection of actual route paths and AI reasoning.
  * 
  * @param text - Text to analyze (acceptance criterion, task title, etc.)
- * @returns Detected resource, action, and extracted keywords
+ * @returns Detected action and extracted keywords
  * 
  * @example
  * ```typescript
- * detectResourceAndAction("User should be able to register")
- * // Returns: { resource: "user", action: "create", keywords: [...] }
+ * detectResourceAndAction("User should be able to create new items")
+ * // Returns: { resource: null, action: "create", keywords: [...] }
  * 
- * detectResourceAndAction("System health check endpoint")
- * // Returns: { resource: null, action: "health", keywords: [...] }
+ * detectResourceAndAction("Retrieve system status")
+ * // Returns: { resource: null, action: "read", keywords: [...] }
  * ```
  */
 export function detectResourceAndAction(text: string): ResourceAction {
   const keywords = extractKeywords(text);
   
-  // Detect action
+  // Detect action using only generic CRUD patterns
   let action: ResourceAction['action'] = null;
   for (const [actionType, pattern] of Object.entries(ACTION_PATTERNS)) {
     if (pattern.test(text)) {
@@ -142,17 +123,10 @@ export function detectResourceAndAction(text: string): ResourceAction {
     }
   }
   
-  // Detect resource
-  let resource: string | null = null;
-  for (const pattern of RESOURCE_PATTERNS) {
-    const match = text.match(pattern);
-    if (match) {
-      resource = match[1].toLowerCase();
-      break;
-    }
-  }
+  // Do not attempt resource detection—let IBM reason about what the route actually handles
+  // Generic resource extraction can be unreliable across different domains
   
-  return { resource, action, keywords };
+  return { resource: null, action, keywords };
 }
 
 /**
