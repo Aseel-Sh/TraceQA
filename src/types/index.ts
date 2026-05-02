@@ -1070,6 +1070,8 @@ export interface HTTPTestStep {
   expectedStatus: number;
   acceptableStatuses: number[];
   expectedBodyContains?: string[];
+  /** Variables to capture from the response */
+  captureVariables?: VariableExtraction[];
 }
 
 /**
@@ -1101,9 +1103,15 @@ export interface GeneratedHTTPTestSuite {
   baseUrl?: string;
   tests: GeneratedHTTPTest[];
   summary: {
+    /** Total number of tests generated (all statuses) */
+    totalGenerated: number;
+    /** Total number of executable tests (ready status only) */
     totalTests: number;
+    /** Number of tests ready for execution */
     readyTests: number;
+    /** Number of tests marked as uncertain */
     uncertainTests: number;
+    /** Number of tests requiring manual execution */
     manualTests: number;
   };
 }
@@ -1142,6 +1150,10 @@ export interface HTTPStepResult {
   passed: boolean;
   duration: number;
   error: string | null;
+  /** Variables captured from this step's response */
+  capturedVariables?: Record<string, any>;
+  /** Response headers from this step */
+  responseHeaders?: Record<string, string>;
 }
 
 /**

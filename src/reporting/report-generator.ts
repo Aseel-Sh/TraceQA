@@ -379,7 +379,7 @@ export class ReportGenerator {
         uncertain: taskPlan.summary.uncertainTasks
       },
       generatedTests: {
-        total: testSuite.summary.totalTests,
+        total: testSuite.summary.totalGenerated,
         ready: testSuite.summary.readyTests,
         uncertain: testSuite.summary.uncertainTests,
         manual: testSuite.summary.manualTests

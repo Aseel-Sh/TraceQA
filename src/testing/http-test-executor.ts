@@ -1,8 +1,9 @@
 /**
  * HTTP Test Executor
- * 
+ *
  * Executes generated HTTP tests and produces detailed results with proper classification.
  * Handles retries, timeouts, assertions, and evidence collection.
+ * Supports variable capture and substitution for multi-step test sequences.
  */
 
 import {
@@ -13,12 +14,21 @@ import {
   HTTPTestResult,
   TraceQAConfig,
   TestFailureClassification,
+  VariableExtraction,
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
 // ============================================================================
 // Types
 // ============================================================================
+
+/**
+ * Reachability check result
+ */
+export interface ReachabilityCheckResult {
+  reachable: boolean;
+  reason?: string;
+}
 
 /**
  * HTTP test execution result with summary
@@ -189,6 +199,220 @@ function assertBodyContains(
 }
 
 // ============================================================================
+// Variable Capture and Resolution
+// ============================================================================
+
+/**
+ * Extract value from response using JSON path notation
+ * Supports simple paths like "$.id", "$.data.userId", "$.items[0].id"
+ *
+ * @param data - Response data (object or array)
+ * @param path - JSON path expression
+ * @returns Extracted value or undefined
+ */
+function extractValueByPath(data: any, path: string): any {
+  if (!data || !path) {
+    return undefined;
+  }
+
+  // Remove leading $. if present
+  const cleanPath = path.startsWith('$.') ? path.substring(2) : path.startsWith('$') ? path.substring(1) : path;
+  
+  if (!cleanPath) {
+    return data;
+  }
+
+  // Split path by dots and brackets
+  const parts = cleanPath.split(/\.|\[|\]/).filter(p => p.length > 0);
+  
+  let current = data;
+  for (const part of parts) {
+    if (current === null || current === undefined) {
+      return undefined;
+    }
+    
+    // Handle array index
+    if (/^\d+$/.test(part)) {
+      const index = parseInt(part, 10);
+      if (Array.isArray(current) && index < current.length) {
+        current = current[index];
+      } else {
+        return undefined;
+      }
+    } else {
+      // Handle object property
+      current = current[part];
+    }
+  }
+  
+  return current;
+}
+
+/**
+ * Capture variables from response based on extraction configuration
+ *
+ * @param response - HTTP response object
+ * @param responseBody - Parsed response body
+ * @param captureConfig - Variable extraction configuration
+ * @returns Captured variables as key-value pairs
+ */
+function captureVariables(
+  response: Response,
+  responseBody: any,
+  captureConfig: VariableExtraction[]
+): Record<string, any> {
+  const captured: Record<string, any> = {};
+
+  for (const config of captureConfig) {
+    try {
+      const source = config.source || 'body';
+      let value: any;
+
+      if (source === 'body') {
+        value = extractValueByPath(responseBody, config.path);
+      } else if (source === 'headers') {
+        // Extract from headers - path is the header name
+        const headerName = config.path.replace(/^\$\.?/, '');
+        value = response.headers.get(headerName);
+      } else if (source === 'status') {
+        value = response.status;
+      }
+
+      if (value !== undefined && value !== null) {
+        captured[config.name] = value;
+        logger.debug(`Captured variable "${config.name}" = ${JSON.stringify(value)}`);
+      } else {
+        logger.warn(`Failed to capture variable "${config.name}" from ${source} using path "${config.path}"`);
+      }
+    } catch (error) {
+      logger.warn(`Error capturing variable "${config.name}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return captured;
+}
+
+/**
+ * Resolve variables in a string using captured values
+ * Supports both {variableName} and {{variableName}} syntax
+ *
+ * @param template - String with variable placeholders
+ * @param variables - Captured variables from previous steps
+ * @returns Object with resolved value and success status
+ */
+function resolveVariables(
+  template: string,
+  variables: Record<string, any>
+): { value: string; success: boolean; unresolvedVars: string[] } {
+  const unresolvedVars: string[] = [];
+  
+  // Match both {var} and {{var}} patterns
+  const resolved = template.replace(/\{\{?(\w+)\}?\}/g, (match, varName) => {
+    if (variables.hasOwnProperty(varName)) {
+      const value = variables[varName];
+      // Convert to string, handling different types
+      return typeof value === 'object' ? JSON.stringify(value) : String(value);
+    } else {
+      unresolvedVars.push(varName);
+      return match; // Keep original placeholder if not found
+    }
+  });
+
+  const success = unresolvedVars.length === 0;
+  
+  if (!success) {
+    logger.warn(`Unresolved variables in template: ${unresolvedVars.join(', ')}`);
+  }
+
+  return { value: resolved, success, unresolvedVars };
+}
+
+/**
+ * Resolve variables in an object (recursively handles nested objects and arrays)
+ *
+ * @param obj - Object with potential variable placeholders
+ * @param variables - Captured variables from previous steps
+ * @returns Object with resolved values and success status
+ */
+function resolveObjectVariables(
+  obj: any,
+  variables: Record<string, any>
+): { value: any; success: boolean; unresolvedVars: string[] } {
+  if (obj === null || obj === undefined) {
+    return { value: obj, success: true, unresolvedVars: [] };
+  }
+
+  const allUnresolvedVars: string[] = [];
+  
+  if (typeof obj === 'string') {
+    const result = resolveVariables(obj, variables);
+    return result;
+  }
+
+  if (Array.isArray(obj)) {
+    const resolvedArray = obj.map(item => {
+      const result = resolveObjectVariables(item, variables);
+      allUnresolvedVars.push(...result.unresolvedVars);
+      return result.value;
+    });
+    return { value: resolvedArray, success: allUnresolvedVars.length === 0, unresolvedVars: allUnresolvedVars };
+  }
+
+  if (typeof obj === 'object') {
+    const resolvedObj: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      const result = resolveObjectVariables(value, variables);
+      allUnresolvedVars.push(...result.unresolvedVars);
+      resolvedObj[key] = result.value;
+    }
+    return { value: resolvedObj, success: allUnresolvedVars.length === 0, unresolvedVars: allUnresolvedVars };
+  }
+
+  return { value: obj, success: true, unresolvedVars: [] };
+}
+
+/**
+ * Prepare a test step by resolving variables in URL, headers, and body
+ *
+ * @param step - Original test step
+ * @param variables - Captured variables from previous steps
+ * @returns Resolved step and resolution status
+ */
+function prepareStepWithVariables(
+  step: HTTPTestStep,
+  variables: Record<string, any>
+): { step: HTTPTestStep; success: boolean; unresolvedVars: string[] } {
+  const allUnresolvedVars: string[] = [];
+
+  // Resolve URL
+  const urlResult = resolveVariables(step.url, variables);
+  allUnresolvedVars.push(...urlResult.unresolvedVars);
+
+  // Resolve headers
+  const headersResult = resolveObjectVariables(step.headers, variables);
+  allUnresolvedVars.push(...headersResult.unresolvedVars);
+
+  // Resolve body
+  const bodyResult = step.body ? resolveObjectVariables(step.body, variables) : { value: null, success: true, unresolvedVars: [] };
+  allUnresolvedVars.push(...bodyResult.unresolvedVars);
+
+  const resolvedStep: HTTPTestStep = {
+    ...step,
+    url: urlResult.value,
+    headers: headersResult.value,
+    body: bodyResult.value,
+  };
+
+  const success = allUnresolvedVars.length === 0;
+
+  if (!success) {
+    logger.warn(`Step ${step.stepId} has unresolved variables: ${[...new Set(allUnresolvedVars)].join(', ')}`);
+  }
+
+  return { step: resolvedStep, success, unresolvedVars: [...new Set(allUnresolvedVars)] };
+}
+
+// ============================================================================
 // Step Execution
 // ============================================================================
 
@@ -274,6 +498,18 @@ async function executeWithRetry(
       errorMessage = errors.join('; ');
     }
 
+    // Capture variables if configured
+    let capturedVariables: Record<string, any> | undefined;
+    if (step.captureVariables && step.captureVariables.length > 0) {
+      capturedVariables = captureVariables(response, responseBody, step.captureVariables);
+    }
+
+    // Extract response headers
+    const responseHeaders: Record<string, string> = {};
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value;
+    });
+
     return {
       stepId: step.stepId,
       description: step.description,
@@ -287,6 +523,8 @@ async function executeWithRetry(
       passed,
       duration,
       error: errorMessage,
+      capturedVariables,
+      responseHeaders,
     };
   } catch (error) {
     const duration = Date.now();
@@ -338,12 +576,46 @@ async function executeWithRetry(
 async function executeHTTPStep(
   step: HTTPTestStep,
   config: TraceQAConfig,
-  _previousStepResults: HTTPStepResult[]
+  previousStepResults: HTTPStepResult[]
 ): Promise<HTTPStepResult> {
   logger.debug(`Executing step: ${step.description}`);
   
+  // Collect all captured variables from previous steps
+  const capturedVariables: Record<string, any> = {};
+  for (const prevResult of previousStepResults) {
+    if (prevResult.capturedVariables) {
+      Object.assign(capturedVariables, prevResult.capturedVariables);
+    }
+  }
+
+  // Resolve variables in the step if any were captured
+  let resolvedStep = step;
+  if (Object.keys(capturedVariables).length > 0) {
+    const resolution = prepareStepWithVariables(step, capturedVariables);
+    resolvedStep = resolution.step;
+    
+    // If variables couldn't be resolved, mark step as failed with uncertain classification
+    if (!resolution.success) {
+      logger.error(`Step ${step.stepId} has unresolved variables: ${resolution.unresolvedVars.join(', ')}`);
+      return {
+        stepId: step.stepId,
+        description: step.description,
+        method: step.method,
+        url: step.url,
+        requestBody: step.body,
+        expectedStatus: step.expectedStatus,
+        acceptableStatuses: step.acceptableStatuses,
+        actualStatus: 0,
+        responseBody: null,
+        passed: false,
+        duration: 0,
+        error: `Unresolved variables: ${resolution.unresolvedVars.join(', ')}. These variables were not captured from previous steps.`,
+      };
+    }
+  }
+  
   // Execute with retry logic (starting at retry count 0)
-  return executeWithRetry(step, config, 0);
+  return executeWithRetry(resolvedStep, config, 0);
 }
 
 // ============================================================================
@@ -751,12 +1023,197 @@ function generateExecutionSummary(
 }
 
 // ============================================================================
+// Reachability Check
+// ============================================================================
+
+/**
+ * Extract first safe GET endpoint from OpenAPI spec
+ *
+ * @param openapiSpec - OpenAPI specification object
+ * @returns First safe GET endpoint path, or null if none found
+ */
+function extractFirstSafeGetEndpoint(openapiSpec: any): string | null {
+  if (!openapiSpec || !openapiSpec.paths) {
+    return null;
+  }
+
+  // Iterate through paths to find first GET endpoint
+  for (const [path, methods] of Object.entries(openapiSpec.paths)) {
+    if (typeof methods !== 'object' || methods === null) continue;
+    
+    const pathMethods = methods as Record<string, any>;
+    
+    // Check if this path has a GET method
+    if (pathMethods.get) {
+      // Avoid endpoints that require path parameters
+      if (!path.includes('{')) {
+        return path;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Load OpenAPI spec from config
+ *
+ * @param config - TraceQA configuration
+ * @returns OpenAPI spec object or null
+ */
+async function loadOpenAPISpec(config: TraceQAConfig): Promise<any | null> {
+  // Check if openapi is configured in the config
+  const openapiPath = (config as any).openapi;
+  
+  if (!openapiPath) {
+    return null;
+  }
+
+  try {
+    // Try to load as JSON file
+    const fs = await import('fs/promises');
+    const content = await fs.readFile(openapiPath, 'utf-8');
+    return JSON.parse(content);
+  } catch (error) {
+    logger.debug(`Could not load OpenAPI spec from ${openapiPath}: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+/**
+ * Check if the application is reachable before running tests
+ *
+ * Priority order:
+ * 1. If config.healthUrl is configured, try GET request to that URL
+ * 2. Else if OpenAPI spec is available, try GET request to baseUrl + first safe GET endpoint
+ * 3. Else try GET request to baseUrl directly
+ *
+ * @param config - TraceQA configuration
+ * @returns Reachability check result
+ */
+async function checkReachability(config: TraceQAConfig): Promise<ReachabilityCheckResult> {
+  const timeout = 5000; // 5 second timeout for reachability checks
+  let checkUrl: string | null = null;
+  let checkMethod = 'unknown';
+
+  try {
+    // Priority 1: Check healthUrl if configured
+    if (config.healthUrl) {
+      checkUrl = config.healthUrl;
+      checkMethod = 'healthUrl';
+      logger.debug(`Checking reachability via healthUrl: ${checkUrl}`);
+    }
+    // Priority 2: Check OpenAPI spec for first safe GET endpoint
+    else if (config.baseUrl) {
+      const openapiSpec = await loadOpenAPISpec(config);
+      
+      if (openapiSpec) {
+        const firstEndpoint = extractFirstSafeGetEndpoint(openapiSpec);
+        
+        if (firstEndpoint) {
+          // Ensure baseUrl doesn't end with / and endpoint starts with /
+          const baseUrl = config.baseUrl.replace(/\/$/, '');
+          const endpoint = firstEndpoint.startsWith('/') ? firstEndpoint : `/${firstEndpoint}`;
+          checkUrl = `${baseUrl}${endpoint}`;
+          checkMethod = 'openapi-endpoint';
+          logger.debug(`Checking reachability via OpenAPI endpoint: ${checkUrl}`);
+        } else {
+          // No safe endpoint found, fall back to baseUrl
+          checkUrl = config.baseUrl;
+          checkMethod = 'baseUrl';
+          logger.debug(`No safe OpenAPI endpoint found, checking baseUrl: ${checkUrl}`);
+        }
+      } else {
+        // No OpenAPI spec, use baseUrl
+        checkUrl = config.baseUrl;
+        checkMethod = 'baseUrl';
+        logger.debug(`Checking reachability via baseUrl: ${checkUrl}`);
+      }
+    }
+
+    // If no URL to check, return reachable (no way to verify)
+    if (!checkUrl) {
+      logger.warn('No URL configured for reachability check (no baseUrl or healthUrl)');
+      return {
+        reachable: true,
+        reason: 'No URL configured for reachability check',
+      };
+    }
+
+    // Perform the reachability check
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const response = await fetch(checkUrl, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: {
+          'Accept': 'application/json, text/plain, */*',
+        },
+      });
+
+      clearTimeout(timeoutId);
+
+      // Consider any response (even errors like 404, 500) as "reachable"
+      // We just want to know if the server is responding
+      logger.debug(`Reachability check successful (status: ${response.status})`);
+      
+      return {
+        reachable: true,
+      };
+    } catch (error) {
+      clearTimeout(timeoutId);
+
+      // Check error type
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorName = (error as any).name;
+
+      if (errorName === 'AbortError') {
+        return {
+          reachable: false,
+          reason: `Timeout: Application did not respond within ${timeout}ms (checked via ${checkMethod})`,
+        };
+      }
+
+      // Network errors indicate unreachable
+      if (error instanceof TypeError ||
+          (error as any).code === 'ECONNREFUSED' ||
+          (error as any).code === 'ENOTFOUND' ||
+          (error as any).code === 'ETIMEDOUT') {
+        return {
+          reachable: false,
+          reason: `Network error: ${errorMessage} (checked via ${checkMethod})`,
+        };
+      }
+
+      // Other errors - consider reachable but log warning
+      logger.warn(`Reachability check encountered unexpected error: ${errorMessage}`);
+      return {
+        reachable: true,
+        reason: `Reachability check completed with warning: ${errorMessage}`,
+      };
+    }
+  } catch (error) {
+    // Unexpected error in reachability check logic itself
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.warn(`Reachability check failed with unexpected error: ${errorMessage}`);
+    
+    // Return reachable to avoid blocking tests due to check logic errors
+    return {
+      reachable: true,
+      reason: `Reachability check error: ${errorMessage}`,
+    };
+  }
+}
+
+// ============================================================================
 // Main Execution Function
 // ============================================================================
 
 /**
  * Execute all HTTP tests in a test suite
- * 
+ *
  * @param testSuite - Generated HTTP test suite
  * @param config - TraceQA configuration
  * @returns Execution result with all test results and summary
@@ -772,6 +1229,62 @@ export async function executeHTTPTests(
   logger.info(`Ready tests: ${testSuite.summary.readyTests}`);
   logger.info(`Uncertain tests: ${testSuite.summary.uncertainTests}`);
   logger.info(`Manual tests: ${testSuite.summary.manualTests}`);
+  logger.newLine();
+
+  // Perform reachability check before running tests
+  logger.info('Performing reachability check...');
+  const reachabilityResult = await checkReachability(config);
+  
+  if (!reachabilityResult.reachable) {
+    logger.error('Application is not reachable', new Error(reachabilityResult.reason || 'Unknown reason'));
+    logger.warn('Marking all tests as infrastructure failures');
+    logger.newLine();
+
+    // Mark all tests as infrastructure failures
+    const results: HTTPTestResult[] = testSuite.tests.map(test => ({
+      testId: test.id,
+      acceptanceCriterionId: test.acceptanceCriterionId,
+      qaTaskId: test.qaTaskId,
+      title: test.title,
+      status: 'failed' as const,
+      executor: 'http' as const,
+      stepResults: [],
+      evidence: [
+        'Pre-run reachability check failed',
+        `Reason: ${reachabilityResult.reason || 'Application not reachable'}`,
+        'All tests skipped due to infrastructure failure',
+      ],
+      classification: {
+        classification: TestFailureClassification.INFRASTRUCTURE_FAILURE,
+        reason: reachabilityResult.reason || 'Application not reachable',
+        confidence: 1.0,
+      },
+      duration: 0,
+      timestamp: new Date().toISOString(),
+    }));
+
+    const duration = Date.now() - startTime;
+    const summary = generateExecutionSummary(results);
+
+    // Log summary
+    logger.section('Execution Summary');
+    logger.keyValue('Total Tests', String(summary.total));
+    logger.keyValue('Passed', String(summary.passed), 1);
+    logger.keyValue('Failed', String(summary.failed), 1);
+    logger.keyValue('Uncertain', String(summary.uncertain), 1);
+    logger.keyValue('Manual', String(summary.manual), 1);
+    logger.keyValue('Skipped', String(summary.skipped), 1);
+    logger.keyValue('Duration', logger.formatDuration(duration));
+    logger.newLine();
+
+    return {
+      results,
+      summary,
+      duration,
+    };
+  }
+
+  logger.success('Application is reachable');
   logger.newLine();
 
   const results: HTTPTestResult[] = [];

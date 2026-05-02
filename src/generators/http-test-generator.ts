@@ -145,6 +145,203 @@ function findRouteHint(stepPath: string, method: string, discoveredRoutes: Disco
   };
 }
 
+/**
+ * Detect if a URL contains variable placeholders that need to be resolved
+ *
+ * @param url - URL to check
+ * @returns True if URL contains unresolved variables
+ */
+/**
+ * Check if a URL contains unresolved template placeholders
+ * Detects all common placeholder formats:
+ * - {id}, {userId}, {resourceId} (curly braces)
+ * - :id, :userId, :resourceId (colon prefix)
+ * - <id>, <userId>, <resourceId> (angle brackets)
+ * - [id], [userId], [resourceId] (square brackets)
+ */
+function hasUnresolvedVariables(url: string): boolean {
+  if (!url || typeof url !== 'string') {
+    return false;
+  }
+  
+  // Check for various placeholder formats
+  const patterns = [
+    /\{[^}]+\}/,           // {id}, {userId}, etc.
+    /:[a-zA-Z_]\w*/,       // :id, :userId, etc. (colon followed by identifier)
+    /<[^>]+>/,             // <id>, <userId>, etc.
+    /\[[^\]]+\]/           // [id], [userId], etc.
+  ];
+  
+  return patterns.some(pattern => pattern.test(url));
+}
+
+/**
+ * Extract placeholder names from a URL template
+ * Returns an array of placeholder names found in the URL
+ */
+function extractPlaceholders(url: string): string[] {
+  if (!url || typeof url !== 'string') {
+    return [];
+  }
+  
+  const placeholders: string[] = [];
+  
+  // Extract {placeholder}
+  const curlyMatches = url.match(/\{([^}]+)\}/g);
+  if (curlyMatches) {
+    placeholders.push(...curlyMatches.map(m => m.slice(1, -1)));
+  }
+  
+  // Extract :placeholder
+  const colonMatches = url.match(/:([a-zA-Z_]\w*)/g);
+  if (colonMatches) {
+    placeholders.push(...colonMatches.map(m => m.slice(1)));
+  }
+  
+  // Extract <placeholder>
+  const angleMatches = url.match(/<([^>]+)>/g);
+  if (angleMatches) {
+    placeholders.push(...angleMatches.map(m => m.slice(1, -1)));
+  }
+  
+  // Extract [placeholder]
+  const squareMatches = url.match(/\[([^\]]+)\]/g);
+  if (squareMatches) {
+    placeholders.push(...squareMatches.map(m => m.slice(1, -1)));
+  }
+  
+  return placeholders;
+}
+
+/**
+ * Validate that URL templates can be resolved by captured variables
+ * Returns validation result with details about unresolved placeholders
+ */
+function validateTemplateResolution(
+  steps: HTTPTestStep[]
+): {
+  valid: boolean;
+  unresolvedPlaceholders: Array<{
+    stepIndex: number;
+    stepId: string;
+    url: string;
+    placeholders: string[];
+  }>;
+  message?: string;
+} {
+  const unresolvedPlaceholders: Array<{
+    stepIndex: number;
+    stepId: string;
+    url: string;
+    placeholders: string[];
+  }> = [];
+  
+  // Track variables captured in previous steps
+  const availableVariables = new Set<string>();
+  
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    
+    // Check if this step's URL has unresolved placeholders
+    if (hasUnresolvedVariables(step.url)) {
+      const placeholders = extractPlaceholders(step.url);
+      
+      // Check which placeholders are not available from previous steps
+      const unresolved = placeholders.filter(p => !availableVariables.has(p));
+      
+      if (unresolved.length > 0) {
+        unresolvedPlaceholders.push({
+          stepIndex: i,
+          stepId: step.stepId,
+          url: step.url,
+          placeholders: unresolved,
+        });
+      }
+    }
+    
+    // Add variables that this step captures for use in subsequent steps
+    if (step.captureVariables && Array.isArray(step.captureVariables)) {
+      step.captureVariables.forEach(capture => {
+        if (capture.name) {
+          availableVariables.add(capture.name);
+        }
+      });
+    }
+  }
+  
+  if (unresolvedPlaceholders.length > 0) {
+    const details = unresolvedPlaceholders
+      .map(u => `Step ${u.stepIndex + 1} (${u.stepId}): URL "${u.url}" has unresolved placeholders: ${u.placeholders.join(', ')}`)
+      .join('; ');
+    
+    return {
+      valid: false,
+      unresolvedPlaceholders,
+      message: `URL template resolution failed: ${details}`,
+    };
+  }
+  
+  return {
+    valid: true,
+    unresolvedPlaceholders: [],
+  };
+}
+
+/**
+ * Detect if a URL references a specific resource ID that likely doesn't exist
+ * Looks for patterns like /api/resources/1, /users/123, etc.
+ *
+ * @param url - URL to check
+ * @returns True if URL appears to reference a specific resource ID
+ */
+function referencesSpecificResourceId(url: string): boolean {
+  // Match patterns like /resource/123 or /resource/abc123
+  // But exclude common patterns like /api/v1 or /users/me
+  const specificIdPattern = /\/[a-z_-]+\/(?!me\b|current\b|self\b)([0-9]+|[a-f0-9]{8,}|[a-z0-9]{20,})\b/i;
+  return specificIdPattern.test(url);
+}
+
+/**
+ * Detect if a test step needs setup (resource creation) before it can execute
+ *
+ * @param step - Test step to analyze
+ * @param stepIndex - Index of the step in the test
+ * @returns Object indicating if setup is needed and why
+ */
+function detectSetupRequirement(
+  step: any,
+  stepIndex: number
+): { needsSetup: boolean; reason: string | null } {
+  const url = typeof step.url === 'string' ? step.url : typeof step.path === 'string' ? step.path : '';
+  const method = typeof step.method === 'string' ? step.method.toUpperCase() : '';
+
+  // First step that's a POST/PUT doesn't need setup (it IS the setup)
+  if (stepIndex === 0 && (method === 'POST' || method === 'PUT')) {
+    return { needsSetup: false, reason: null };
+  }
+
+  // Check for unresolved variables
+  if (hasUnresolvedVariables(url)) {
+    return {
+      needsSetup: true,
+      reason: `URL contains unresolved variables: ${url}`,
+    };
+  }
+
+  // Check if URL references a specific resource ID
+  if (referencesSpecificResourceId(url)) {
+    // If it's a GET/DELETE/PATCH on a specific ID, it likely needs setup
+    if (['GET', 'DELETE', 'PATCH', 'PUT'].includes(method)) {
+      return {
+        needsSetup: true,
+        reason: `${method} request to specific resource ID that may not exist: ${url}`,
+      };
+    }
+  }
+
+  return { needsSetup: false, reason: null };
+}
+
 function buildOpenApiSummary(openApiSpec: any): string {
   if (!openApiSpec || typeof openApiSpec !== 'object') {
     return 'None';
@@ -180,9 +377,13 @@ function createUncertainTest(options: {
   task: QATask;
   acceptanceCriterion: AcceptanceCriterion;
   reason: string;
+  index?: number;
 }): GeneratedHTTPTest {
+  const taskNumber = options.task.taskId.replace('QA-', '');
+  const testId = options.index !== undefined ? `TC-${taskNumber}-${options.index}` : `TC-${taskNumber}`;
+  
   return {
-    id: `TC-${options.task.taskId.replace('QA-', '')}`,
+    id: testId,
     qaTaskId: options.task.taskId,
     acceptanceCriterionId: options.acceptanceCriterion.id,
     title: options.task.title,
@@ -198,7 +399,8 @@ function normalizeGeneratedTest(
   task: QATask,
   acceptanceCriterion: AcceptanceCriterion,
   discoveredRoutes: DiscoveredRoute[],
-  baseUrl: string
+  baseUrl: string,
+  index: number
 ): GeneratedHTTPTest | null {
   const warnings: string[] = [];
 
@@ -209,10 +411,13 @@ function normalizeGeneratedTest(
   // Enforce acceptanceCriterionId to equal the task's acceptance criterion
   const rawAcId = typeof rawTest.acceptanceCriterionId === 'string' ? rawTest.acceptanceCriterionId : undefined;
   const acceptanceCriterionId = acceptanceCriterion.id;
+  const taskNumber = task.taskId.replace('QA-', '');
+  const testId = `TC-${taskNumber}-${index}`;
+  
   if (rawAcId && rawAcId !== acceptanceCriterionId) {
     // Do not silently accept wrong AC IDs — mark uncertain and explain mapping mismatch
     return {
-      id: typeof rawTest.id === 'string' && rawTest.id.trim().length > 0 ? rawTest.id : `TC-${task.taskId.replace('QA-', '')}`,
+      id: testId,
       qaTaskId: task.taskId,
       acceptanceCriterionId,
       title: typeof rawTest.title === 'string' && rawTest.title.trim().length > 0 ? rawTest.title.trim() : task.title,
@@ -236,7 +441,7 @@ function normalizeGeneratedTest(
 
   if (!Array.isArray(rawTest.steps) || rawTest.steps.length === 0) {
     return {
-      id: typeof rawTest.id === 'string' && rawTest.id.trim().length > 0 ? rawTest.id : `TC-${task.taskId.replace('QA-', '')}`,
+      id: testId,
       qaTaskId: task.taskId,
       acceptanceCriterionId,
       title,
@@ -255,6 +460,7 @@ function normalizeGeneratedTest(
       task,
       acceptanceCriterion,
       reason: 'No discovered routes were available to validate this test.',
+      index,
     });
   }
 
@@ -273,6 +479,7 @@ function normalizeGeneratedTest(
         task,
         acceptanceCriterion,
         reason: `Step ${stepNumber} has invalid HTTP method.`,
+        index,
       });
     }
 
@@ -288,6 +495,7 @@ function normalizeGeneratedTest(
           task,
           acceptanceCriterion,
           reason: `Step ${stepNumber} has an invalid URL object/stringified object.`,
+          index,
         });
       }
 
@@ -296,6 +504,7 @@ function normalizeGeneratedTest(
           task,
           acceptanceCriterion,
           reason: `Step ${stepNumber} has an invalid URL format.`,
+          index,
         });
       }
 
@@ -307,6 +516,20 @@ function normalizeGeneratedTest(
         task,
         acceptanceCriterion,
         reason: `Step ${stepNumber} is missing a path or URL.`,
+        index,
+      });
+    }
+
+    // Check if this step needs setup before execution
+    const setupCheck = detectSetupRequirement(rawStep, index);
+    if (setupCheck.needsSetup) {
+      warnings.push(`Step ${stepNumber}: ${setupCheck.reason}`);
+      // Mark as uncertain if setup is needed but not provided
+      return createUncertainTest({
+        task,
+        acceptanceCriterion,
+        reason: `Setup required: ${setupCheck.reason}`,
+        index,
       });
     }
 
@@ -316,6 +539,7 @@ function normalizeGeneratedTest(
         task,
         acceptanceCriterion,
         reason: `Step ${stepNumber} does not match any discovered route.`,
+        index,
       });
     }
 
@@ -325,6 +549,7 @@ function normalizeGeneratedTest(
         task,
         acceptanceCriterion,
         reason: `Step ${stepNumber} must use an object request body.`,
+        index,
       });
     }
 
@@ -334,6 +559,7 @@ function normalizeGeneratedTest(
         task,
         acceptanceCriterion,
         reason: `Step ${stepNumber} is missing a numeric expectedStatus.`,
+        index,
       });
     }
 
@@ -366,10 +592,28 @@ function normalizeGeneratedTest(
     });
   }
 
+  // Validate URL template resolution before marking as ready
+  const templateValidation = validateTemplateResolution(normalizedSteps);
+  if (!templateValidation.valid) {
+    return {
+      id: testId,
+      qaTaskId: task.taskId,
+      acceptanceCriterionId,
+      title,
+      type: 'api',
+      status: 'uncertain',
+      uncertainReason: templateValidation.message || 'URL templates cannot be resolved with available captured variables',
+      steps: normalizedSteps,
+      reasoning,
+      confidence,
+      executionMode: 'uncertain',
+    } as GeneratedHTTPTest;
+  }
+
   const isAutomated = executionMode === 'automated' && confidence >= 0.7 && warnings.length === 0;
 
   return {
-    id: typeof rawTest.id === 'string' && rawTest.id.trim().length > 0 ? rawTest.id : `TC-${task.taskId.replace('QA-', '')}`,
+    id: testId,
     qaTaskId: task.taskId,
     acceptanceCriterionId,
     title,
@@ -493,7 +737,7 @@ export async function generateHTTPTests(
     summary,
   };
 
-  logger.success(`Generated ${tests.length} HTTP tests`);
+  logger.success(`Generated ${summary.totalGenerated} HTTP tests (${summary.totalTests} executable)`);
   logger.info(`Ready: ${summary.readyTests}, Uncertain: ${summary.uncertainTests}, Manual: ${summary.manualTests}`);
 
   return {
@@ -609,13 +853,16 @@ async function generateTestsWithIBM(
     }
 
     const normalizedTests: GeneratedHTTPTest[] = [];
-    for (const rawTest of data.tests) {
+    for (let i = 0; i < data.tests.length; i++) {
+      const rawTest = data.tests[i];
+      const testIndex = i + 1; // 1-based index for test IDs
       const normalized = normalizeGeneratedTest(
         rawTest,
         task,
         acceptanceCriterion,
         discoveredRoutes,
-        projectContext.baseUrl
+        projectContext.baseUrl,
+        testIndex
       );
 
       if (normalized) {
@@ -1079,12 +1326,21 @@ function determineTestStatus(
     reasons.push(`${emptyBodySteps.length} steps have empty request bodies`);
   }
 
-  // Check for invalid URLs
+  // Check for invalid URLs and unresolved templates
   const invalidUrlSteps = steps.filter(
-    step => !step.url || step.url.includes('{') || step.url.includes('"')
+    step => !step.url || step.url.includes('"')
   );
   if (invalidUrlSteps.length > 0) {
     reasons.push(`${invalidUrlSteps.length} steps have invalid URLs`);
+  }
+
+  // Check for unresolved URL templates
+  const templateValidation = validateTemplateResolution(steps);
+  if (!templateValidation.valid) {
+    const placeholderDetails = templateValidation.unresolvedPlaceholders
+      .map(u => `${u.placeholders.join(', ')}`)
+      .join(', ');
+    reasons.push(`Unresolved URL placeholders: ${placeholderDetails}`);
   }
 
   // Determine final status
@@ -1116,21 +1372,27 @@ function determineTestStatus(
 
 /**
  * Generate test summary statistics
- * 
+ *
  * @param tests - Generated HTTP tests
  * @returns Summary statistics
  */
 function generateTestSummary(tests: GeneratedHTTPTest[]): {
+  totalGenerated: number;
   totalTests: number;
   readyTests: number;
   uncertainTests: number;
   manualTests: number;
 } {
+  const readyTests = tests.filter(t => t.status === 'ready').length;
+  const uncertainTests = tests.filter(t => t.status === 'uncertain').length;
+  const manualTests = tests.filter(t => t.status === 'manual').length;
+  
   return {
-    totalTests: tests.length,
-    readyTests: tests.filter(t => t.status === 'ready').length,
-    uncertainTests: tests.filter(t => t.status === 'uncertain').length,
-    manualTests: tests.filter(t => t.status === 'manual').length,
+    totalGenerated: tests.length,
+    totalTests: readyTests, // Only count ready/executable tests
+    readyTests,
+    uncertainTests,
+    manualTests,
   };
 }
 
@@ -1197,8 +1459,9 @@ function generateFallbackTest(
       }];
     }
   } else {
+    const taskNumber = task.taskId.replace('QA-', '');
     return {
-      id: `TC-${task.taskId.replace('QA-', '')}`,
+      id: `TC-${taskNumber}-1`,
       qaTaskId: task.taskId,
       acceptanceCriterionId: task.acceptanceCriterionId,
       title: task.title,
@@ -1226,8 +1489,9 @@ function generateFallbackTest(
     bodyGeneration
   );
 
+  const taskNumber = task.taskId.replace('QA-', '');
   return {
-    id: `TC-${task.taskId.replace('QA-', '')}`,
+    id: `TC-${taskNumber}-1`,
     qaTaskId: task.taskId,
     acceptanceCriterionId: task.acceptanceCriterionId,
     title: task.title,
