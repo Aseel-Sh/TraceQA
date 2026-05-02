@@ -1,5 +1,5 @@
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import fs from 'fs-extra';
+import path from 'path';
 import { GeneratedTestArtifacts, ExecutableHTTPTest } from './test-generator';
 
 const OUTPUT_DIR = 'traceqa-generated';
@@ -8,7 +8,7 @@ const OUTPUT_DIR = 'traceqa-generated';
  * Ensure the output directory exists
  */
 async function ensureOutputDir(): Promise<string> {
-  await fs.mkdir(OUTPUT_DIR, { recursive: true });
+  await fs.ensureDir(OUTPUT_DIR);
   return OUTPUT_DIR;
 }
 
@@ -165,12 +165,7 @@ export async function readGeneratedHTTPTests(): Promise<ExecutableHTTPTest[]> {
  * Check if generated artifacts exist
  */
 export async function artifactsExist(): Promise<boolean> {
-  try {
-    await fs.access(path.join(OUTPUT_DIR, 'generated-http-tests.json'));
-    return true;
-  } catch {
-    return false;
-  }
+  return await fs.pathExists(path.join(OUTPUT_DIR, 'generated-http-tests.json'));
 }
 
 // Made with Bob

@@ -4,6 +4,7 @@
  */
 
 import { TestContext, DiffAnalysis } from '../types/index.js';
+import { RouteDiscoveryResult } from '../discovery/route-discovery.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -38,7 +39,11 @@ Guidelines:
 /**
  * Test planning prompt template
  */
-export function getTestPlanningPrompt(context: TestContext, diffAnalysis?: DiffAnalysis | null): string {
+export function getTestPlanningPrompt(
+  context: TestContext,
+  diffAnalysis?: DiffAnalysis | null,
+  discoveredRoutes?: RouteDiscoveryResult | null
+): string {
   const { repository, changes, description, acceptanceCriteria, buildInfo } = context;
 
   let prompt = `# Test Planning Request
@@ -86,6 +91,20 @@ ${diffAnalysis.suggestedTestFocus.length > 0
 **IMPORTANT**: Prioritize tests for the impacted areas and suggested focus areas above.`;
   }
 
+  // Add discovered routes if available
+  if (discoveredRoutes && discoveredRoutes.routes.length > 0) {
+    prompt += `
+
+## Discovered API Routes
+Framework: ${discoveredRoutes.framework}
+Discovery Method: ${discoveredRoutes.discoveryMethod}
+
+### Available Routes:
+${discoveredRoutes.routes.map(route => `- ${route.method.padEnd(6)} ${route.path}`).join('\n')}
+
+**IMPORTANT**: Use these discovered routes when generating API test cases. Construct full URLs by combining the base URL with these paths. Ensure HTTP methods match the discovered routes.`;
+  }
+
   prompt += `
 
 ## Build Information
@@ -104,12 +123,15 @@ Create a comprehensive test plan that:
 
 **CRITICAL JSON FORMATTING REQUIREMENTS:**
 - Return ONLY valid JSON, no markdown, no code fences, no explanatory text
+- Your response MUST start with { and end with }
+- Do NOT include any prose, commentary, or explanations before or after the JSON
 - Use double quotes for all strings, NOT single quotes
 - Request bodies must be JSON objects, NOT stringified JSON
 - Do NOT wrap response in \`\`\`json blocks or any other formatting
 - Ensure all JSON is properly escaped and valid
 - Numbers should not be quoted unless they are string values
 - Boolean values must be true/false (lowercase, unquoted)
+- NO text before the opening brace { or after the closing brace }
 
 **IMPORTANT TRACEABILITY REQUIREMENTS:**
 - Each test case MUST map to a specific acceptance criterion ID (e.g., AC-1, AC-2)

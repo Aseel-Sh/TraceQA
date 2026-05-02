@@ -1,0 +1,151 @@
+{
+  "testCases": [
+    {
+      "id": "TC-001",
+      "name": "Valid user registration",
+      "description": "Tests if a user can register with a valid email and strong password",
+      "type": "api",
+      "priority": "high",
+      "acceptanceCriterionId": "AC-1",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/api/register",
+          "value": "{\"email\": \"test@example.com\", \"password\": \"StrongPassword123!\"}",
+          "description": "Send a POST request with a valid email and strong password"
+        },
+        {
+          "action": "api_call",
+          "target": "/api/login",
+          "value": "{\"email\": \"test@example.com\", \"password\": \"StrongPassword123!\"}",
+          "description": "Send a POST request with the registered email and password"
+        },
+        {
+          "action": "verify",
+          "target": "{\"statusCode\": 200}",
+          "value": "{\"statusCode\": 200}",
+          "description": "Verify a successful login"
+        }
+      ],
+      "expectedResult": "The user is registered and can log in successfully"
+    },
+    {
+      "id": "TC-002",
+      "name": "Invalid email format registration",
+      "description": "Tests if registration rejects invalid email formats",
+      "type": "api",
+      "priority": "high",
+      "acceptanceCriterionId": "AC-2",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/api/register",
+          "value": "{\"email\": \"test@example\", \"password\": \"StrongPassword123!\"}",
+          "description": "Send a POST request with an invalid email format"
+        },
+        {
+          "action": "verify",
+          "target": "{\"statusCode\": 400}",
+          "value": "{\"statusCode\": 400}",
+          "description": "Verify registration returns a bad request error"
+        }
+      ],
+      "expectedResult": "The registration fails with a bad request error"
+    },
+    {
+      "id": "TC-003",
+      "name": "Weak password registration",
+      "description": "Tests if registration rejects weak passwords",
+      "type": "api",
+      "priority": "high",
+      "acceptanceCriterionId": "AC-3",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/api/register",
+          "value": "{\"email\": \"test@example.com\", \"password\": \"password123\"}",
+          "description": "Send a POST request with a weak password"
+        },
+        {
+          "action": "verify",
+          "target": "{\"statusCode\": 400}",
+          "value": "{\"statusCode\": 400}",
+          "description": "Verify registration returns a bad request error"
+        }
+      ],
+      "expectedResult": "The registration fails with a bad request error"
+    },
+    {
+      "id": "TC-004",
+      "name": "Duplicate email registration conflict",
+      "description": "Tests if duplicate email registration returns a clear conflict error",
+      "type": "api",
+      "priority": "high",
+      "acceptanceCriterionId": "AC-4",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/api/register",
+          "value": "{\"email\": \"test@example.com\", \"password\": \"StrongPassword123!\"}",
+          "description": "Send a POST request with the same email as an existing user"
+        },
+        {
+          "action": "verify",
+          "target": "{\"error\": \"Duplicate email\"}",
+          "value": "{\"error\": \"Duplicate email\"}",
+          "description": "Verify registration returns a duplicate email error"
+        }
+      ],
+      "expectedResult": "The registration fails with a duplicate email error"
+    },
+    {
+      "id": "TC-005",
+      "name": "Valid user login",
+      "description": "Tests if a registered user can log in with valid credentials",
+      "type": "api",
+      "priority": "high",
+      "acceptanceCriterionId": "AC-5",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/api/login",
+          "value": "{\"email\": \"test@example.com\", \"password\": \"StrongPassword123!\"}",
+          "description": "Send a POST request with the registered email and password"
+        },
+        {
+          "action": "verify",
+          "target": "{\"statusCode\": 200}",
+          "value": "{\"statusCode\": 200}",
+          "description": "Verify a successful login"
+        }
+      ],
+      "expectedResult": "The user logs in successfully"
+    },
+    {
+      "id": "TC-006",
+      "name": "Invalid login credentials",
+      "description": "Tests if invalid login credentials are rejected",
+      "type": "api",
+      "priority": "high",
+      "acceptanceCriterionId": "AC-6",
+      "steps": [
+        {
+          "action": "api_call",
+          "target": "/api/login",
+          "value": "{\"email\": \"test@example.com\", \"password\": \"wrongpassword\"}",
+          "description": "Send a POST request with invalid credentials"
+        },
+        {
+          "action": "verify",
+          "target": "{\"statusCode\": 401}",
+          "value": "{\"statusCode\": 401}",
+          "description": "Verify login fails with an unauthorized error"
+        }
+      ],
+      "expectedResult": "The login fails with an unauthorized error"
+    },
+    {
+      "id": "TC-007",
+      "name": "Health endpoint",
+      "description": "Tests if the health endpoint returns OK",
+      "type

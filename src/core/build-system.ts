@@ -67,6 +67,7 @@ export class BuildSystem {
     startCommand?: string;
     language?: string;
     projectType?: string;
+    type?: string;
   };
 
   constructor(projectPath?: string, customConfig: any = {}) {
@@ -76,7 +77,8 @@ export class BuildSystem {
       buildCommand: customConfig.buildCommand,
       startCommand: customConfig.startCommand,
       language: customConfig.language,
-      projectType: customConfig.projectType
+      projectType: customConfig.projectType,
+      type: customConfig.type
     };
   }
 
@@ -621,6 +623,13 @@ export class BuildSystem {
    */
   getProjectDetection(): ProjectDetectionResult | null {
     return this.projectDetection;
+  }
+
+  /**
+   * Get custom configuration
+   */
+  getCustomConfig() {
+    return this.customConfig;
   }
 
   /**

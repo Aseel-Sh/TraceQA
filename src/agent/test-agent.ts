@@ -9,9 +9,11 @@ import {
   SYSTEM_PROMPT,
   getTestPlanningPrompt,
   getTestExecutionPrompt,
-  getReportGenerationPrompt,
-  parseJSONResponse
+  getReportGenerationPrompt
 } from './prompts.js';
+import { parseJSONSafely } from '../utils/json-extractor.js';
+import fs from 'fs-extra';
+import path from 'path';
 import {
   AgentConfig,
   AgentState,
@@ -29,6 +31,7 @@ import {
   TestType,
   DiffAnalysis
 } from '../types/index.js';
+import { RouteDiscoveryResult } from '../discovery/route-discovery.js';
 import { MCPClientManager } from '../mcp/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -81,13 +84,17 @@ export class TestAgent {
   /**
    * Create a comprehensive test plan based on context
    */
-  async createTestPlan(context: TestContext, diffAnalysis?: DiffAnalysis | null): Promise<TestPlan> {
+  async createTestPlan(
+    context: TestContext,
+    diffAnalysis?: DiffAnalysis | null,
+    discoveredRoutes?: RouteDiscoveryResult | null
+  ): Promise<TestPlan> {
     this.updatePhase('planning');
     logger.info('Creating test plan...');
 
     try {
-      // Generate test planning prompt with optional diff analysis
-      const prompt = getTestPlanningPrompt(context, diffAnalysis);
+      // Generate test planning prompt with optional diff analysis and discovered routes
+      const prompt = getTestPlanningPrompt(context, diffAnalysis, discoveredRoutes);
 
       // Get response from Watsonx
       const response = await this.watsonxClient.sendMessage(prompt);
@@ -143,73 +150,79 @@ export class TestAgent {
   /**
    * Parse test plan with repair attempts
    */
-  private async parseTestPlanWithRepair(response: string): Promise<{
+  private async parseTestPlanWithRepair(
+    rawResponse: string,
+    attempt: number = 1
+  ): Promise<{
     testCases: TestCase[];
     estimatedDuration: number;
     requiredResources: string[];
     reasoning: string;
   } | null> {
-    const fs = await import('fs-extra');
-    const path = await import('path');
-
-    // Try parsing as-is first
-    try {
-      const parsed = parseJSONResponse<{
-        testCases: TestCase[];
-        estimatedDuration: number;
-        requiredResources: string[];
-        reasoning: string;
-      }>(response);
-      
-      if (parsed) {
-        logger.debug('Successfully parsed test plan on first attempt');
-        return parsed;
-      }
-    } catch (error) {
-      logger.debug('Initial JSON parse failed, attempting repair...');
+    // Try balanced JSON extraction first
+    const parsed = parseJSONSafely<{
+      testCases: TestCase[];
+      estimatedDuration: number;
+      requiredResources: string[];
+      reasoning: string;
+    }>(rawResponse);
+    
+    if (parsed && this.validateTestPlanStructure(parsed)) {
+      logger.debug('Successfully parsed test plan using balanced extraction');
+      return parsed;
     }
 
     // Save raw response for debugging
-    const proofDir = path.join(process.cwd(), 'traceqa-proof');
-    await fs.ensureDir(proofDir);
-    const rawResponsePath = path.join(proofDir, 'raw-ai-response.txt');
-    await fs.writeFile(rawResponsePath, response, 'utf-8');
-    logger.info(`Raw AI response saved to: ${rawResponsePath}`);
-
-    // Attempt repair: strip markdown fences
-    let repairedResponse = response.trim();
-    
-    // Remove markdown code fences
-    repairedResponse = repairedResponse.replace(/^```json\s*/i, '');
-    repairedResponse = repairedResponse.replace(/^```\s*/i, '');
-    repairedResponse = repairedResponse.replace(/\s*```$/i, '');
-    
-    // Fix single quotes to double quotes (be careful with apostrophes in strings)
-    // This is a simple approach - more sophisticated parsing might be needed
-    repairedResponse = repairedResponse.replace(/'/g, '"');
-    
-    // Try to extract JSON object if there's extra text
-    const jsonMatch = repairedResponse.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      repairedResponse = jsonMatch[0];
-    }
-
-    // Try parsing repaired response
     try {
-      const parsed = JSON.parse(repairedResponse);
-      logger.success('Successfully parsed test plan after repair');
-      return parsed;
-    } catch (repairError) {
-      logger.error('JSON repair failed', repairError);
-      throw new TraceQAError(
-        `Failed to parse test plan JSON. Raw response saved to: ${rawResponsePath}`,
-        ErrorCategory.AGENT,
-        {
-          originalError: repairError instanceof Error ? repairError.message : String(repairError),
-          rawResponsePath
-        }
+      const debugDir = path.join(process.cwd(), 'traceqa-debug');
+      await fs.ensureDir(debugDir);
+      await fs.writeFile(
+        path.join(debugDir, `raw-response-attempt-${attempt}.txt`),
+        rawResponse,
+        'utf-8'
       );
+      logger.info(`Raw AI response saved to: traceqa-debug/raw-response-attempt-${attempt}.txt`);
+    } catch (err) {
+      logger.warn(`Failed to save debug response: ${err instanceof Error ? err.message : String(err)}`);
     }
+
+    // Try one repair pass if first attempt failed
+    if (attempt === 1) {
+      logger.warn('Initial JSON parsing failed, attempting repair...');
+      
+      const repairPrompt = `The following response contains invalid JSON. Please return ONLY valid JSON with no markdown, no prose, no code fences, no commentary:
+
+${rawResponse}
+
+Return valid JSON only:`;
+
+      const repairedResponse = await this.watsonxClient.sendMessage(repairPrompt, {
+        maxTokens: 4000,
+        temperature: 0.1,
+      });
+
+      return this.parseTestPlanWithRepair(repairedResponse, 2);
+    }
+
+    throw new TraceQAError(
+      'Failed to parse test plan after repair attempt',
+      ErrorCategory.AGENT,
+      { rawResponse: rawResponse.substring(0, 500) }
+    );
+  }
+
+  /**
+   * Validate test plan structure (returns boolean for use in parseJSONSafely)
+   */
+  private validateTestPlanStructure(plan: any): boolean {
+    return !!(
+      plan &&
+      plan.testCases &&
+      Array.isArray(plan.testCases) &&
+      typeof plan.estimatedDuration === 'number' &&
+      plan.requiredResources &&
+      Array.isArray(plan.requiredResources)
+    );
   }
 
   /**

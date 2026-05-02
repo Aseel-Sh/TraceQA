@@ -220,11 +220,6 @@ async function handleTestCommand(options: {
       acceptanceCriteria = parsed.criteria.map(c => `${c.id}: ${c.description}`);
       
       logger.success(`✓ Parsed ${parsed.criteria.length} acceptance criteria from ${path.basename(criteriaPath)}`);
-      logger.newLine();
-      
-      parsed.criteria.forEach(criterion => {
-        logger.listItem(`${criterion.id}: ${criterion.description}`);
-      });
     } else if (options.description) {
       // Split multi-sentence descriptions into acceptance criteria
       // Split on period followed by space or newlines
@@ -479,6 +474,7 @@ async function executeTests(
   logger.keyValue('Description', config.description);
   
   if (config.acceptanceCriteria && config.acceptanceCriteria.length > 0) {
+    logger.newLine();
     logger.subsection('Acceptance Criteria');
     config.acceptanceCriteria.forEach(criteria => {
       logger.listItem(criteria);
@@ -519,8 +515,8 @@ async function executeTests(
   });
 
   try {
-    // Run tests with diff analysis
-    const { results, report } = await coordinator.runTests(config, diffAnalysis);
+    // Run tests with diff analysis and discovered routes
+    const { results, report } = await coordinator.runTests(config, diffAnalysis, discoveredRoutes);
     
     // Display results
     logger.newLine();

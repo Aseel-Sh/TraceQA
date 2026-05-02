@@ -31,6 +31,7 @@ import {
   APIAssertion,
   DiffAnalysis
 } from '../types/index.js';
+import { RouteDiscoveryResult } from '../discovery/route-discovery.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -90,7 +91,11 @@ export class TestCoordinator {
   /**
    * Run complete test workflow
    */
-  async runTests(testConfig: TestConfig, diffAnalysis?: DiffAnalysis | null): Promise<{
+  async runTests(
+    testConfig: TestConfig,
+    diffAnalysis?: DiffAnalysis | null,
+    discoveredRoutes?: RouteDiscoveryResult | null
+  ): Promise<{
     testPlan: TestPlan;
     results: TestResults;
     analysis: AgentAnalysis;
@@ -111,9 +116,20 @@ export class TestCoordinator {
       // Phase 3: Create test context
       const context = await this.createTestContext(testConfig, buildResult, diffAnalysis);
 
+      // Log discovered routes if available
+      if (discoveredRoutes && discoveredRoutes.routes.length > 0) {
+        logger.info(`\n🔍 Discovered ${discoveredRoutes.routes.length} routes (${discoveredRoutes.framework}):`);
+        discoveredRoutes.routes.slice(0, 10).forEach(route => {
+          logger.info(`  ${route.method.padEnd(6)} ${route.path}`);
+        });
+        if (discoveredRoutes.routes.length > 10) {
+          logger.info(`  ... and ${discoveredRoutes.routes.length - 10} more`);
+        }
+      }
+
       // Phase 4: Plan tests
       this.updatePhase('planning');
-      const testPlan = await this.agent.createTestPlan(context, diffAnalysis);
+      const testPlan = await this.agent.createTestPlan(context, diffAnalysis, discoveredRoutes);
       this.state.testPlan = testPlan;
 
       // Phase 5: Execute tests
@@ -296,15 +312,10 @@ export class TestCoordinator {
     logger.info('Creating test context...');
 
     const projectDetection = this.buildSystem.getProjectDetection();
-    if (!projectDetection) {
-      throw new TraceQAError(
-        'Project detection not available',
-        ErrorCategory.CONFIGURATION
-      );
-    }
-
-    // Create build info
-    const buildInfo: BuildInfo = {
+    const customConfig = this.buildSystem.getCustomConfig();
+    
+    // Build BuildInfo from config if detection not available
+    const buildInfo: BuildInfo = projectDetection ? {
       framework: projectDetection.framework.name,
       language: projectDetection.packageJson.dependencies?.['typescript']
         ? 'TypeScript'
@@ -312,6 +323,15 @@ export class TestCoordinator {
       buildCommand: projectDetection.buildCommands.build,
       testCommand: projectDetection.buildCommands.test,
       startCommand: projectDetection.buildCommands.dev || projectDetection.buildCommands.start,
+      port: buildResult.port,
+      success: buildResult.success
+    } : {
+      // Use config values with sensible defaults when project detection is not available
+      framework: customConfig.projectType || customConfig.type || 'generic',
+      language: customConfig.language || 'generic',
+      buildCommand: customConfig.buildCommand || 'none',
+      testCommand: undefined,
+      startCommand: customConfig.startCommand || 'external/already-running',
       port: buildResult.port,
       success: buildResult.success
     };
