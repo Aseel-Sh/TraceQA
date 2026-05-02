@@ -11,7 +11,7 @@ import {
   getTestExecutionPrompt,
   getReportGenerationPrompt
 } from './prompts.js';
-import { parseJSONSafely } from '../utils/json-extractor.js';
+import { parseJSONSafely, safeExtractJSON, ExtractionResult } from '../utils/json-extractor.js';
 import fs from 'fs-extra';
 import path from 'path';
 import {
@@ -79,6 +79,157 @@ export class TestAgent {
   setMCPManager(manager: MCPClientManager): void {
     this.mcpManager = manager;
     logger.debug('MCP manager set for test agent');
+  }
+
+  /**
+   * Generate QA task suggestions from IBM watsonx
+   * Returns AI suggestions array instead of complete test plan
+   */
+  async generateTests(
+    acceptanceCriteria: any[],
+    routes: any[],
+    baseUrl: string
+  ): Promise<any[]> {
+    logger.info('Generating QA task suggestions from IBM watsonx...');
+    
+    try {
+      const prompt = this.buildPrompt(acceptanceCriteria, routes, baseUrl);
+      const response = await this.watsonxClient.sendMessage(prompt);
+      
+      // Use robust JSON extraction
+      const extractionResult: ExtractionResult = safeExtractJSON(response, {
+        saveRawOnFailure: true
+      });
+      
+      if (!extractionResult.success) {
+        logger.warn('Failed to extract JSON from IBM response');
+        
+        // Save raw output for debugging
+        if (extractionResult.rawText) {
+          await this.saveRawResponse(extractionResult.rawText);
+        }
+        
+        // Return empty array - fallback mapper will handle it
+        logger.info('Falling back to deterministic test generation');
+        return [];
+      }
+      
+      // Validate extracted data
+      const data = extractionResult.data;
+      
+      // Handle both array and object responses
+      let suggestions: any[] = [];
+      
+      if (Array.isArray(data)) {
+        suggestions = data;
+      } else if (data && typeof data === 'object') {
+        // Check for common response structures
+        if (Array.isArray(data.tasks)) {
+          suggestions = data.tasks;
+        } else if (Array.isArray(data.testCases)) {
+          suggestions = data.testCases;
+        } else if (Array.isArray(data.tests)) {
+          suggestions = data.tests;
+        } else {
+          // Single task/test object
+          suggestions = [data];
+        }
+      }
+      
+      logger.success(`✓ Extracted ${suggestions.length} QA task suggestions from IBM`);
+      return suggestions;
+      
+    } catch (error) {
+      logger.error('Error generating tests from IBM:', error);
+      
+      // Return empty array - fallback mapper will handle it
+      logger.info('Falling back to deterministic test generation');
+      return [];
+    }
+  }
+
+  /**
+   * Build prompt for QA task suggestions
+   */
+  private buildPrompt(
+    acceptanceCriteria: any[],
+    routes: any[],
+    baseUrl: string
+  ): string {
+    const prompt = `You are a QA automation expert. Analyze the following acceptance criteria and API routes to suggest QA tasks.
+
+Acceptance Criteria:
+${acceptanceCriteria.map((ac, i) => `${i + 1}. [${ac.id}] ${ac.description || ac.criterion}
+   Expected: ${ac.expectedResult || 'Not specified'}`).join('\n')}
+
+Discovered API Routes:
+${routes.map(r => `- ${r.method} ${r.path}${r.description ? ` (${r.description})` : ''}`).join('\n')}
+
+Base URL: ${baseUrl}
+
+For each acceptance criterion, suggest a QA task with:
+- acceptanceCriterionId: The AC ID (e.g., "AC-1")
+- title: Clear task title
+- type: "api", "ui", "integration", "manual", or "uncertain"
+- priority: "high", "medium", or "low"
+- executionMode: "automated", "manual", or "uncertain"
+- steps: Array of test steps with description and expectedOutcome
+- expectedResult: What should happen
+- reasoning: Why this task maps to the AC
+- uncertainReason: (optional) Why automation is uncertain
+
+Return a JSON array of task suggestions. If you cannot safely automate a task, mark it as "uncertain" with a reason.
+
+Example format:
+[
+  {
+    "acceptanceCriterionId": "AC-1",
+    "title": "Test user registration with valid data",
+    "type": "api",
+    "priority": "high",
+    "executionMode": "automated",
+    "steps": [
+      {
+        "description": "Send POST request to /api/register with valid user data",
+        "expectedOutcome": "User is created successfully"
+      }
+    ],
+    "expectedResult": "User registration succeeds with 201 status",
+    "reasoning": "AC-1 requires testing successful registration"
+  }
+]
+
+Respond with ONLY the JSON array, no explanations.`;
+
+    return prompt;
+  }
+
+  /**
+   * Save raw response for debugging
+   */
+  private async saveRawResponse(rawText: string): Promise<void> {
+    try {
+      const debugDir = 'traceqa-debug';
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      
+      // Ensure debug directory exists
+      try {
+        await fs.mkdir(debugDir, { recursive: true });
+      } catch (e) {
+        // Directory might already exist
+      }
+      
+      const timestamp = Date.now();
+      const filename = `raw-ibm-response-${timestamp}.txt`;
+      const filepath = path.join(debugDir, filename);
+      
+      await fs.writeFile(filepath, rawText, 'utf-8');
+      logger.info(`Raw IBM response saved to ${filepath}`);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.warn(`Failed to save raw response: ${errorMsg}`);
+    }
   }
 
   /**

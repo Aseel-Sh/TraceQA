@@ -896,6 +896,207 @@ export interface APITestResult {
 }
 
 // ============================================================================
+// QA Task Plan Types
+// ============================================================================
+
+/**
+ * QA task type classification
+ */
+export type QATaskType = 'api' | 'ui' | 'integration' | 'manual' | 'uncertain';
+
+/**
+ * QA task priority level
+ */
+export type QATaskPriority = 'high' | 'medium' | 'low';
+
+/**
+ * Execution mode for QA tasks
+ */
+export type ExecutionMode = 'automated' | 'manual' | 'uncertain';
+
+/**
+ * Individual step within a QA task
+ */
+export interface QATaskStep {
+  description: string;
+  action?: string;
+  expectedOutcome?: string;
+}
+
+/**
+ * QA task definition from the deterministic task plan
+ */
+export interface QATask {
+  taskId: string;
+  acceptanceCriterionId: string;
+  title: string;
+  type: QATaskType;
+  priority: QATaskPriority;
+  preconditions: string[];
+  setupData?: Record<string, any>;
+  steps: QATaskStep[];
+  expectedResult: string;
+  executionMode: ExecutionMode;
+  reasoning: string;
+  uncertainReason?: string;
+}
+
+/**
+ * Complete QA task plan schema
+ */
+export interface QATaskPlan {
+  projectName?: string;
+  timestamp: string;
+  acceptanceCriteria: AcceptanceCriterion[];
+  tasks: QATask[];
+  summary: {
+    totalTasks: number;
+    automatedTasks: number;
+    manualTasks: number;
+    uncertainTasks: number;
+  };
+}
+
+// ============================================================================
+// Generated HTTP Test Types
+// ============================================================================
+
+/**
+ * Test status for generated tests
+ */
+export type TestStatus = 'ready' | 'uncertain' | 'manual' | 'skipped';
+
+/**
+ * Individual HTTP test step
+ */
+export interface HTTPTestStep {
+  stepId: string;
+  description?: string;
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+  body?: any;
+  expectedStatus: number;
+  acceptableStatuses: number[];
+  expectedBodyContains?: string[];
+  expectedBodySchema?: Record<string, any>;
+}
+
+/**
+ * Generated HTTP test from the executable test schema
+ */
+export interface GeneratedHTTPTest {
+  id: string;
+  acceptanceCriterionId: string;
+  qaTaskId?: string;
+  title: string;
+  type: 'api';
+  status: TestStatus;
+  uncertainReason?: string | null;
+  steps: HTTPTestStep[];
+  setupRequired?: boolean;
+  teardownRequired?: boolean;
+}
+
+/**
+ * Complete generated HTTP test suite
+ */
+export interface GeneratedHTTPTestSuite {
+  projectName?: string;
+  timestamp: string;
+  baseUrl?: string;
+  tests: GeneratedHTTPTest[];
+  summary: {
+    totalTests: number;
+    readyTests: number;
+    uncertainTests: number;
+    manualTests: number;
+  };
+}
+
+// ============================================================================
+// Test Execution Result Types
+// ============================================================================
+
+/**
+ * Assertion result for test validation
+ */
+export interface AssertionResult {
+  type: string;
+  expected: any;
+  actual: any;
+  passed: boolean;
+  message: string;
+}
+
+/**
+ * HTTP step execution result
+ */
+export interface HTTPStepResult {
+  stepId: string;
+  method: string;
+  url: string;
+  requestBody?: any;
+  expectedStatus: number;
+  acceptableStatuses: number[];
+  actualStatus?: number;
+  responseBody?: any;
+  duration: number;
+  passed: boolean;
+  error?: string;
+  assertions: AssertionResult[];
+}
+
+/**
+ * HTTP test execution result
+ */
+export interface HTTPTestResult {
+  testId: string;
+  title: string;
+  acceptanceCriterionId: string;
+  status: 'passed' | 'failed' | 'uncertain' | 'skipped';
+  steps: HTTPStepResult[];
+  duration: number;
+  error?: string;
+  message?: string;
+}
+
+// ============================================================================
+// Fallback Mapper Types
+// ============================================================================
+
+/**
+ * Discovered route information for route matching
+ */
+export interface DiscoveredRoute {
+  method: string;
+  path: string;
+  description?: string;
+  handler?: string;
+  middleware?: string[];
+}
+
+/**
+ * Route match result with confidence level
+ */
+export interface RouteMatch {
+  route: DiscoveredRoute;
+  confidence: 'high' | 'medium' | 'low';
+  reason: string;
+}
+
+/**
+ * Fallback mapping result for deterministic test generation
+ */
+export interface FallbackMappingResult {
+  success: boolean;
+  qaTask?: QATask;
+  httpTest?: GeneratedHTTPTest;
+  reason: string;
+  confidence: 'high' | 'medium' | 'low';
+}
+
+// ============================================================================
 // Test Execution Types
 // ============================================================================
 

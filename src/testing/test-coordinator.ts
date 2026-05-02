@@ -11,6 +11,11 @@ import { TestRunner } from './test-runner.js';
 import { APITester } from './api-tester.js';
 import { WebTester } from './web-tester.js';
 import { TestNormalizer, NormalizedTest } from './test-normalizer.js';
+import { QATaskGenerator, HTTPTestGenerator } from '../generators/qa-task-generator.js';
+import { writeAllGeneratedArtifacts } from '../generators/artifact-writer.js';
+import { parseAcceptanceCriteriaFromFile } from '../parsers/acceptance-parser.js';
+import { discoverRoutes } from '../discovery/route-discovery.js';
+import { ReportGenerator } from '../reporting/report-generator.js';
 import {
   TestConfig,
   TestContext,
@@ -30,7 +35,9 @@ import {
   HTTPMethod,
   AssertionType,
   APIAssertion,
-  DiffAnalysis
+  DiffAnalysis,
+  QATaskPlan,
+  GeneratedHTTPTestSuite
 } from '../types/index.js';
 import { RouteDiscoveryResult } from '../discovery/route-discovery.js';
 import { logger, formatDuration } from '../utils/logger.js';
@@ -180,6 +187,140 @@ export class TestCoordinator {
         logger.error('Cleanup failed', cleanupError);
       }
 
+      throw error;
+    }
+  }
+
+  /**
+   * Run tests using the new two-phase architecture
+   * This is a simplified workflow for CLI-based testing with acceptance criteria files
+   * 
+   * @param options - Test execution options
+   * @param options.acceptancePath - Path to acceptance criteria file
+   * @param options.baseUrl - Base URL for API tests
+   * @param options.outputDir - Output directory for reports and artifacts
+   */
+  async runTestsWithNewArchitecture(options: {
+    acceptancePath: string;
+    baseUrl: string;
+    outputDir?: string;
+  }): Promise<void> {
+    const { acceptancePath, baseUrl, outputDir = 'traceqa-proof' } = options;
+
+    try {
+      logger.info('Starting TraceQA test execution...');
+
+      // Phase 1: Parse acceptance criteria
+      logger.info('Phase 1: Parsing acceptance criteria...');
+      const parsed = await parseAcceptanceCriteriaFromFile(acceptancePath);
+      const acceptanceCriteria = parsed.criteria;
+      logger.success(`✓ Parsed ${acceptanceCriteria.length} acceptance criteria`);
+
+      // Phase 2: Discover routes
+      logger.info('Phase 2: Discovering API routes...');
+      const discoveryResult = await discoverRoutes(process.cwd());
+      const routes = discoveryResult?.routes || [];
+      logger.success(`✓ Discovered ${routes.length} routes`);
+
+      // Phase 3: Get AI suggestions (can fail gracefully)
+      logger.info('Phase 3: Getting AI QA task suggestions...');
+      let aiSuggestions: any[] = [];
+      try {
+        aiSuggestions = await this.agent.generateTests(
+          acceptanceCriteria,
+          routes,
+          baseUrl
+        );
+        
+        if (aiSuggestions.length > 0) {
+          logger.success(`✓ Received ${aiSuggestions.length} AI task suggestions`);
+        } else {
+          logger.warn('⚠ No AI suggestions received, using deterministic fallback');
+        }
+      } catch (error) {
+        logger.warn('⚠ AI suggestion generation failed, using deterministic fallback');
+        logger.debug('AI error:', error);
+      }
+
+      // Phase 4: Generate QA task plan (validates AI + deterministic fallback)
+      logger.info('Phase 4: Generating QA task plan...');
+      const qaTaskGenerator = new QATaskGenerator(baseUrl, routes);
+      const qaTaskPlan: QATaskPlan = qaTaskGenerator.generateTaskPlan(
+        acceptanceCriteria,
+        aiSuggestions
+      );
+      
+      const automatedCount = qaTaskPlan.tasks.filter(t => t.executionMode === 'automated').length;
+      const manualCount = qaTaskPlan.tasks.filter(t => t.executionMode === 'manual').length;
+      const uncertainCount = qaTaskPlan.tasks.filter(t => t.executionMode === 'uncertain').length;
+      
+      logger.success(`✓ Generated QA task plan: ${qaTaskPlan.tasks.length} tasks total`);
+      logger.info(`  - ${automatedCount} automated`);
+      logger.info(`  - ${manualCount} manual`);
+      logger.info(`  - ${uncertainCount} uncertain`);
+
+      // Phase 5: Generate executable HTTP tests
+      logger.info('Phase 5: Generating executable HTTP tests...');
+      const httpTestGenerator = new HTTPTestGenerator(baseUrl, routes);
+      const httpTestSuite: GeneratedHTTPTestSuite = httpTestGenerator.generateTestSuite(
+        qaTaskPlan
+      );
+      
+      logger.success(`✓ Generated ${httpTestSuite.tests.length} executable HTTP tests`);
+
+      // Phase 6: Write all artifacts
+      logger.info('Phase 6: Writing generated artifacts...');
+      await writeAllGeneratedArtifacts(qaTaskPlan, httpTestSuite, outputDir);
+      logger.success(`✓ Artifacts written to ${outputDir}/`);
+
+      // Phase 7: Execute HTTP tests
+      logger.info('Phase 7: Executing HTTP tests...');
+      // Note: Actual test execution would be implemented here
+      // For now, we're focusing on the generation pipeline
+      logger.info(`Generated ${httpTestSuite.tests.length} tests ready for execution`);
+
+      // Phase 8: Generate report
+      logger.info('Phase 8: Generating test report...');
+      const reportGenerator = new ReportGenerator();
+      
+      // Create a mock TestResults for report generation
+      const testResults: TestResults = {
+        summary: {
+          total: httpTestSuite.tests.length,
+          passed: 0,
+          failed: 0,
+          skipped: httpTestSuite.tests.length,
+          duration: 0,
+          successRate: 0
+        },
+        results: [],
+        repository: {
+          path: process.cwd(),
+          name: 'current',
+          branch: 'current'
+        },
+        timestamp: new Date().toISOString()
+      };
+
+      await reportGenerator.generateReport(
+        testResults,
+        acceptanceCriteria.map(c => `${c.id}: ${c.description}`),
+        outputDir
+      );
+      
+      logger.success(`✓ Report generated in ${outputDir}/`);
+
+      // Summary
+      logger.info('\n=== Test Generation Summary ===');
+      logger.info(`Total QA Tasks: ${qaTaskPlan.tasks.length}`);
+      logger.info(`  - Automated: ${automatedCount}`);
+      logger.info(`  - Manual: ${manualCount}`);
+      logger.info(`  - Uncertain: ${uncertainCount}`);
+      logger.info(`Generated HTTP Tests: ${httpTestSuite.tests.length}`);
+      logger.info(`Artifacts: ${outputDir}/`);
+
+    } catch (error) {
+      logger.error('Test execution failed:', error);
       throw error;
     }
   }

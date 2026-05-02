@@ -2,22 +2,29 @@ import fs from 'fs-extra';
 import path from 'path';
 import { GeneratedTestArtifacts, ExecutableHTTPTest } from './test-generator';
 import { NormalizedTest } from '../testing/test-normalizer.js';
-import { APITestConfig, AssertionType } from '../types/index.js';
+import {
+  APITestConfig,
+  AssertionType,
+  QATaskPlan,
+  GeneratedHTTPTestSuite,
+  GeneratedHTTPTest
+} from '../types/index.js';
+import { logger } from '../utils/logger.js';
 
 const OUTPUT_DIR = 'traceqa-generated';
 
 /**
  * Ensure the output directory exists
  */
-async function ensureOutputDir(): Promise<string> {
-  await fs.ensureDir(OUTPUT_DIR);
-  return OUTPUT_DIR;
+async function ensureOutputDir(outputDir: string = OUTPUT_DIR): Promise<string> {
+  await fs.ensureDir(outputDir);
+  return outputDir;
 }
 
 /**
- * Write QA task plan to file
+ * Write QA task plan to file (legacy - for backward compatibility)
  */
-async function writeQATaskPlan(qaTaskPlan: any, outputDir: string): Promise<string> {
+async function writeQATaskPlanLegacy(qaTaskPlan: any, outputDir: string): Promise<string> {
   const filePath = path.join(outputDir, 'qa-task-plan.json');
   await fs.writeFile(filePath, JSON.stringify(qaTaskPlan, null, 2), 'utf-8');
   return filePath;
@@ -138,7 +145,7 @@ export async function writeTestArtifacts(artifacts: GeneratedTestArtifacts): Pro
   const outputDir = await ensureOutputDir();
   
   const files = {
-    qaTaskPlan: await writeQATaskPlan(artifacts.qaTaskPlan, outputDir),
+    qaTaskPlan: await writeQATaskPlanLegacy(artifacts.qaTaskPlan, outputDir),
     httpTests: await writeHTTPTests(artifacts.httpTests, outputDir),
     documentation: await writeTestMarkdown(artifacts, outputDir),
     metadata: await writeMetadata(artifacts, outputDir)
@@ -274,6 +281,182 @@ function generateNormalizedTestMarkdown(normalizedTests: NormalizedTest[]): stri
   }
   
   return markdown;
+}
+
+/**
+ * Write QA task plan to file (new architecture)
+ */
+export async function writeQATaskPlan(
+  taskPlan: QATaskPlan,
+  outputDir: string = OUTPUT_DIR
+): Promise<void> {
+  await ensureOutputDir(outputDir);
+  
+  const filePath = path.join(outputDir, 'qa-task-plan.json');
+  
+  logger.info(`Writing QA task plan to ${filePath}...`);
+  
+  await fs.writeFile(
+    filePath,
+    JSON.stringify(taskPlan, null, 2),
+    'utf-8'
+  );
+  
+  logger.success(`✓ QA task plan written to ${filePath}`);
+}
+
+/**
+ * Write generated HTTP tests to file (new architecture)
+ */
+export async function writeGeneratedHTTPTests(
+  testSuite: GeneratedHTTPTestSuite,
+  outputDir: string = OUTPUT_DIR
+): Promise<void> {
+  await ensureOutputDir(outputDir);
+  
+  const filePath = path.join(outputDir, 'generated-http-tests.json');
+  
+  logger.info(`Writing generated HTTP tests to ${filePath}...`);
+  
+  await fs.writeFile(
+    filePath,
+    JSON.stringify(testSuite, null, 2),
+    'utf-8'
+  );
+  
+  logger.success(`✓ Generated HTTP tests written to ${filePath}`);
+}
+
+/**
+ * Write generated tests markdown documentation (new architecture)
+ */
+export async function writeGeneratedTestsMarkdown(
+  taskPlan: QATaskPlan,
+  testSuite: GeneratedHTTPTestSuite,
+  outputDir: string = OUTPUT_DIR
+): Promise<void> {
+  await ensureOutputDir(outputDir);
+  
+  const filePath = path.join(outputDir, 'generated-tests.md');
+  
+  logger.info(`Writing generated tests markdown to ${filePath}...`);
+  
+  const markdown = generateTestsMarkdown(taskPlan, testSuite);
+  
+  await fs.writeFile(filePath, markdown, 'utf-8');
+  
+  logger.success(`✓ Generated tests markdown written to ${filePath}`);
+}
+
+/**
+ * Generate markdown documentation for QA tasks and HTTP tests
+ */
+function generateTestsMarkdown(
+  taskPlan: QATaskPlan,
+  testSuite: GeneratedHTTPTestSuite
+): string {
+  const lines: string[] = [];
+  
+  lines.push('# TraceQA Generated Tests\n');
+  lines.push(`Generated: ${new Date().toISOString()}\n`);
+  
+  // Summary
+  lines.push('## Summary\n');
+  lines.push(`- **Total QA Tasks**: ${taskPlan.summary.totalTasks}`);
+  lines.push(`- **Automated Tasks**: ${taskPlan.summary.automatedTasks}`);
+  lines.push(`- **Manual Tasks**: ${taskPlan.summary.manualTasks}`);
+  lines.push(`- **Uncertain Tasks**: ${taskPlan.summary.uncertainTasks}\n`);
+  
+  lines.push(`- **Total HTTP Tests**: ${testSuite.summary.totalTests}`);
+  lines.push(`- **Ready Tests**: ${testSuite.summary.readyTests}`);
+  lines.push(`- **Uncertain Tests**: ${testSuite.summary.uncertainTests}`);
+  lines.push(`- **Manual Tests**: ${testSuite.summary.manualTests}\n`);
+  
+  // QA Tasks
+  lines.push('## QA Task Plan\n');
+  
+  for (const task of taskPlan.tasks) {
+    lines.push(`### ${task.taskId}: ${task.title}\n`);
+    lines.push(`- **Type**: ${task.type}`);
+    lines.push(`- **Priority**: ${task.priority}`);
+    lines.push(`- **Execution Mode**: ${task.executionMode}`);
+    lines.push(`- **Acceptance Criterion**: ${task.acceptanceCriterionId}\n`);
+    
+    if (task.steps.length > 0) {
+      lines.push('**Steps**:');
+      for (const step of task.steps) {
+        lines.push(`1. ${step.description}`);
+        if (step.expectedOutcome) {
+          lines.push(`   - Expected: ${step.expectedOutcome}`);
+        }
+      }
+      lines.push('');
+    }
+    
+    lines.push(`**Expected Result**: ${task.expectedResult}\n`);
+    lines.push(`**Reasoning**: ${task.reasoning}\n`);
+    
+    if (task.uncertainReason) {
+      lines.push(`⚠️ **Uncertain**: ${task.uncertainReason}\n`);
+    }
+  }
+  
+  // HTTP Tests
+  lines.push('## Generated HTTP Tests\n');
+  
+  for (const test of testSuite.tests) {
+    lines.push(`### ${test.id}: ${test.title}\n`);
+    lines.push(`- **Status**: ${test.status}`);
+    lines.push(`- **Acceptance Criterion**: ${test.acceptanceCriterionId}`);
+    if (test.qaTaskId) {
+      lines.push(`- **QA Task**: ${test.qaTaskId}`);
+    }
+    lines.push('');
+    
+    if (test.status === 'ready' && test.steps.length > 0) {
+      lines.push('**Test Steps**:\n');
+      
+      for (const step of test.steps) {
+        lines.push(`#### ${step.stepId}\n`);
+        lines.push('```http');
+        lines.push(`${step.method} ${step.url}`);
+        if (step.headers) {
+          for (const [key, value] of Object.entries(step.headers)) {
+            lines.push(`${key}: ${value}`);
+          }
+        }
+        if (step.body) {
+          lines.push('');
+          lines.push(JSON.stringify(step.body, null, 2));
+        }
+        lines.push('```\n');
+        
+        lines.push(`**Expected Status**: ${step.expectedStatus}`);
+        lines.push(`**Acceptable Statuses**: [${step.acceptableStatuses.join(', ')}]\n`);
+      }
+    } else if (test.uncertainReason) {
+      lines.push(`⚠️ **${test.status.toUpperCase()}**: ${test.uncertainReason}\n`);
+    }
+  }
+  
+  return lines.join('\n');
+}
+
+/**
+ * Write all generated artifacts at once (new architecture)
+ */
+export async function writeAllGeneratedArtifacts(
+  taskPlan: QATaskPlan,
+  testSuite: GeneratedHTTPTestSuite,
+  outputDir: string = OUTPUT_DIR
+): Promise<void> {
+  logger.info('Writing all generated artifacts...');
+  
+  await writeQATaskPlan(taskPlan, outputDir);
+  await writeGeneratedHTTPTests(testSuite, outputDir);
+  await writeGeneratedTestsMarkdown(taskPlan, testSuite, outputDir);
+  
+  logger.success('✓ All generated artifacts written successfully');
 }
 
 // Made with Bob

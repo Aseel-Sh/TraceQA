@@ -13,12 +13,12 @@ import { BuildSystem } from '../core/build-system.js';
 import { TestAgent } from '../agent/test-agent.js';
 import { MCPClientManager } from '../mcp/index.js';
 import { TestCoordinator } from '../testing/test-coordinator.js';
-import { ReportGenerator } from '../reporting/index.js';
 import { AmbiguityDetector, GitAnalyzer } from '../analysis/index.js';
 import { DemoRunner } from '../demo/demo-runner.js';
 import { loadAndMergeConfig } from '../config/config-loader.js';
 import { parseAcceptanceCriteriaFromFile } from '../parsers/acceptance-parser.js';
 import { discoverRoutes, RouteDiscoveryResult } from '../discovery/route-discovery.js';
+import { confirm } from '@clack/prompts';
 
 // Package version - will be replaced during build
 const VERSION = '0.1.0';
@@ -31,14 +31,30 @@ export function createCLI(): Command {
 
   program
     .name('traceqa')
-    .description('Intelligent CLI tool for developer-driven QA testing')
+    .description('AI-Powered QA Automation - Intelligent CLI tool for developer-driven testing')
     .version(VERSION, '-v, --version', 'Display version number')
-    .helpOption('-h, --help', 'Display help information');
+    .helpOption('-h, --help', 'Display help information')
+    .addHelpText('after', `
+Examples:
+  # Run tests with new architecture (recommended)
+  $ traceqa run --acceptance-path acceptance.md --base-url http://localhost:3000
+  
+  # Auto-approve execution without confirmation
+  $ traceqa run --acceptance-path acceptance.md --base-url http://localhost:3000 --yes
+  
+  # Specify custom output directory
+  $ traceqa run --acceptance-path acceptance.md --base-url http://localhost:3000 -o ./reports
+  
+  # Legacy interactive mode
+  $ traceqa test --criteria acceptance.md --base-url http://localhost:3000
 
-  // Main test command (default)
+For more information, visit: https://github.com/yourusername/traceqa
+    `);
+
+  // Main test command (default) - Legacy workflow
   program
     .command('test', { isDefault: true })
-    .description('Run interactive testing mode')
+    .description('Run interactive testing mode (legacy workflow)')
     .option('-r, --repo <path>', 'Repository path to test')
     .option('-b, --branch <name>', 'Git branch to test')
     .option('-d, --description <text>', 'Change description')
@@ -60,9 +76,29 @@ export function createCLI(): Command {
     .option('--no-build', 'Skip build step')
     .option('--no-start', 'Skip starting the application')
     .option('--debug', 'Enable debug mode')
+    .option('--verbose', 'Enable verbose logging')
     .action(async (options) => {
       try {
         await handleTestCommand(options);
+      } catch (error) {
+        handleError(error);
+        process.exit(1);
+      }
+    });
+
+  // Run command - New architecture workflow
+  program
+    .command('run')
+    .description('Run tests with new architecture (recommended)')
+    .requiredOption('--acceptance-path <path>', 'Path to acceptance criteria file (required)')
+    .requiredOption('--base-url <url>', 'Base URL of the application to test (required)')
+    .option('-o, --output-dir <path>', 'Output directory for reports and artifacts', 'traceqa-proof')
+    .option('-y, --yes', 'Auto-approve execution without confirmation')
+    .option('--verbose', 'Enable verbose logging')
+    .option('--debug', 'Enable debug mode')
+    .action(async (options) => {
+      try {
+        await handleRunCommand(options);
       } catch (error) {
         handleError(error);
         process.exit(1);
@@ -428,6 +464,135 @@ async function handleTestCommand(options: {
 }
 
 /**
+ * Handle the run command (new architecture)
+ */
+async function handleRunCommand(options: {
+  acceptancePath: string;
+  baseUrl: string;
+  outputDir?: string;
+  yes?: boolean;
+  verbose?: boolean;
+  debug?: boolean;
+}): Promise<void> {
+  // Enable debug/verbose mode if requested
+  if (options.debug) {
+    logger.setDebugMode(true);
+    logger.debug('Debug mode enabled');
+  }
+
+  logger.section('TraceQA - New Architecture');
+  logger.info('Starting test execution with new workflow...');
+  logger.newLine();
+
+  // Validate acceptance criteria file
+  const acceptancePath = path.resolve(options.acceptancePath);
+  try {
+    await fs.access(acceptancePath);
+  } catch (error) {
+    throw new TraceQAError(
+      `Acceptance criteria file not found: ${acceptancePath}`,
+      ErrorCategory.CONFIGURATION
+    );
+  }
+
+  // Validate base URL format
+  try {
+    new URL(options.baseUrl);
+  } catch (error) {
+    throw new TraceQAError(
+      `Invalid base URL: ${options.baseUrl}. Base URL must be a valid HTTP/HTTPS URL (e.g., http://localhost:3000)`,
+      ErrorCategory.CONFIGURATION
+    );
+  }
+
+  // Display configuration
+  logger.subsection('Configuration');
+  logger.keyValue('Acceptance Criteria', acceptancePath);
+  logger.keyValue('Base URL', options.baseUrl);
+  logger.keyValue('Output Directory', options.outputDir || 'traceqa-proof');
+  logger.newLine();
+
+  // Show confirmation prompt unless --yes flag is provided
+  if (!options.yes) {
+    logger.subsection('Execution Plan');
+    logger.info('TraceQA will:');
+    logger.listItem('Parse acceptance criteria from the provided file');
+    logger.listItem('Discover API routes automatically');
+    logger.listItem('Generate QA task plan with AI assistance');
+    logger.listItem('Create executable HTTP test suite');
+    logger.listItem('Write all artifacts to output directory');
+    logger.listItem('Generate comprehensive test reports');
+    logger.newLine();
+
+    const shouldContinue = await confirm({
+      message: 'Do you want to proceed with test execution?',
+      initialValue: true
+    });
+
+    if (!shouldContinue || shouldContinue === Symbol.for('clack.cancel')) {
+      logger.warn('Test execution cancelled by user');
+      process.exit(0);
+    }
+    logger.newLine();
+  }
+
+  // Get API key from environment
+  const apiKey = process.env.IBM_WATSONX_API_KEY;
+  if (!apiKey) {
+    throw new TraceQAError(
+      'IBM_WATSONX_API_KEY environment variable not set. Please set it or use: traceqa config --api-key YOUR_KEY',
+      ErrorCategory.CONFIGURATION
+    );
+  }
+
+  // Initialize components
+  logger.info('Initializing test coordinator...');
+  const buildSystem = new BuildSystem(process.cwd(), {});
+  const agent = new TestAgent({ apiKey });
+  const mcpManager = new MCPClientManager();
+
+  const coordinator = new TestCoordinator(buildSystem, agent, mcpManager, {
+    baseUrl: options.baseUrl
+  });
+
+  try {
+    // Run tests with new architecture
+    await coordinator.runTestsWithNewArchitecture({
+      acceptancePath,
+      baseUrl: options.baseUrl,
+      outputDir: options.outputDir || 'traceqa-proof'
+    });
+
+    logger.newLine();
+    logger.success('✓ TraceQA execution completed successfully');
+    logger.info(`  Reports and artifacts: ${path.resolve(options.outputDir || 'traceqa-proof')}/`);
+    logger.newLine();
+
+  } catch (error) {
+    logger.error('Test execution failed', error);
+    
+    // Provide helpful error messages
+    if (error instanceof Error) {
+      if (error.message.includes('API key')) {
+        logger.newLine();
+        logger.info('💡 Tip: Make sure IBM_WATSONX_API_KEY environment variable is set');
+        logger.info('   You can set it with: traceqa config --api-key YOUR_KEY');
+      } else if (error.message.includes('connection') || error.message.includes('ECONNREFUSED')) {
+        logger.newLine();
+        logger.info('💡 Tip: Make sure your application is running at the specified base URL');
+        logger.info(`   Base URL: ${options.baseUrl}`);
+      } else if (error.message.includes('acceptance')) {
+        logger.newLine();
+        logger.info('💡 Tip: Check that your acceptance criteria file exists and is properly formatted');
+        logger.info(`   File: ${acceptancePath}`);
+      }
+    }
+    
+    throw error;
+  }
+}
+
+/**
  * Parse test type string to TestType enum
  */
 function parseTestType(type: string): TestType {
@@ -454,7 +619,7 @@ function parseTestType(type: string): TestType {
 }
 
 /**
- * Execute tests with the given configuration
+ * Execute tests with the given configuration using new architecture
  */
 async function executeTests(
   config: TestConfig,
@@ -462,8 +627,9 @@ async function executeTests(
   projectConfig: any = {},
   discoveredRoutes: RouteDiscoveryResult | null = null
 ): Promise<void> {
-  // TODO: Pass discoveredRoutes to test agent for enhanced test generation
-  void discoveredRoutes; // Suppress unused variable warning
+  // Suppress unused variable warnings for now
+  void diffAnalysis;
+  void discoveredRoutes;
   
   logger.section('Test Execution');
   
@@ -483,9 +649,56 @@ async function executeTests(
 
   logger.newLine();
 
-  // Initialize components
-  logger.info('Initializing test components...');
-  
+  // Validate required parameters for new architecture
+  if (!config.acceptanceCriteria || config.acceptanceCriteria.length === 0) {
+    throw new TraceQAError(
+      'Acceptance criteria are required. Use --criteria flag to provide an acceptance criteria file.',
+      ErrorCategory.CONFIGURATION
+    );
+  }
+
+  if (!config.baseUrl) {
+    throw new TraceQAError(
+      'Base URL is required. Use --base-url flag to specify the application URL.',
+      ErrorCategory.CONFIGURATION
+    );
+  }
+
+  // Validate base URL format
+  try {
+    new URL(config.baseUrl);
+  } catch (error) {
+    throw new TraceQAError(
+      `Invalid base URL: ${config.baseUrl}. Base URL must be a valid HTTP/HTTPS URL (e.g., http://localhost:3000)`,
+      ErrorCategory.CONFIGURATION
+    );
+  }
+
+  // Show confirmation prompt unless --yes flag is provided
+  if (!config.autoApprove) {
+    logger.newLine();
+    logger.section('Execution Confirmation');
+    logger.info('TraceQA will now:');
+    logger.listItem('Generate QA task plan from acceptance criteria');
+    logger.listItem('Create test artifacts and scripts');
+    logger.listItem(`Execute tests against ${config.baseUrl}`);
+    logger.listItem(`Generate reports in ${config.outputDir || 'traceqa-proof'}`);
+    logger.newLine();
+
+    const shouldContinue = await confirm({
+      message: 'Do you want to proceed with test execution?',
+      initialValue: true
+    });
+
+    if (!shouldContinue || shouldContinue === Symbol.for('clack.cancel')) {
+      logger.warn('Test execution cancelled by user');
+      process.exit(0);
+    }
+  }
+
+  logger.newLine();
+  logger.info('Initializing test coordinator...');
+
   // Get API key from environment
   const apiKey = process.env.IBM_WATSONX_API_KEY;
   if (!apiKey) {
@@ -494,99 +707,59 @@ async function executeTests(
       ErrorCategory.CONFIGURATION
     );
   }
-  
+
+  // Initialize required components for TestCoordinator
   const buildSystem = new BuildSystem(config.repository.path, projectConfig);
   const agent = new TestAgent({ apiKey });
   const mcpManager = new MCPClientManager();
-  
-  // Determine autoInstall, autoBuild, autoStart from config
-  const autoInstall = projectConfig.autoInstall !== false;
-  const autoBuild = projectConfig.autoBuild !== false;
-  const autoStart = projectConfig.autoStart !== false && (config.testType === TestType.WEB_UI || config.testType === TestType.BOTH);
-  
+
+  // Create coordinator instance with required dependencies
   const coordinator = new TestCoordinator(buildSystem, agent, mcpManager, {
-    buildSystem: {
-      autoInstall,
-      autoBuild,
-      autoStart
-    },
     baseUrl: config.baseUrl,
     healthUrl: projectConfig.healthUrl
   });
 
   try {
-    // Run tests with diff analysis and discovered routes
-    const { results, report } = await coordinator.runTests(config, diffAnalysis, discoveredRoutes);
+    // Prepare acceptance criteria content
+    const acceptanceCriteriaContent = config.acceptanceCriteria.join('\n');
     
-    // Display results
+    // Create a temporary file for acceptance criteria if needed
+    const tempAcceptancePath = path.join(config.repository.path, '.traceqa-temp-acceptance.md');
+    await fs.writeFile(tempAcceptancePath, acceptanceCriteriaContent, 'utf-8');
+
+    // Run tests with new architecture
     logger.newLine();
-    logger.section('Test Results');
+    logger.section('Running Tests with New Architecture');
     
-    logger.keyValue('Total Tests', results.summary.total.toString());
-    logger.keyValue('Passed', results.summary.passed.toString());
-    logger.keyValue('Failed', results.summary.failed.toString());
-    logger.keyValue('Skipped', results.summary.skipped.toString());
-    
-    if (results.summary.passed === results.summary.total) {
-      logger.success('All tests passed! ✓');
-    } else if (results.summary.failed > 0) {
-      logger.error(`${results.summary.failed} test(s) failed`);
-    } else if (results.summary.skipped > 0) {
-      logger.warn(`${results.summary.skipped} test(s) were skipped`);
-    }
-    
-    // Display individual test results
+    await coordinator.runTestsWithNewArchitecture({
+      acceptancePath: tempAcceptancePath,
+      baseUrl: config.baseUrl,
+      outputDir: config.outputDir || 'traceqa-proof'
+    });
+
+    // Clean up temporary file
+    await fs.remove(tempAcceptancePath);
+
     logger.newLine();
-    logger.subsection('Test Details');
-    
-    for (const result of results.results) {
-      const status = result.passed ? '✓' : '✗';
-      
-      logger.info(`${status} ${result.testCaseName} (${result.duration}ms)`);
-      
-      if (result.message) {
-        logger.debug(`  ${result.message}`);
-      }
-      
-      if (result.error) {
-        logger.error(`  Error: ${result.error}`);
-      }
-    }
-    
-    // Display report
-    if (report) {
-      logger.newLine();
-      logger.section('Analysis');
-      logger.info(report);
-    }
-    
-    // Generate comprehensive reports
-    logger.newLine();
-    logger.section('Generating Reports');
-    
-    try {
-      const reportGenerator = new ReportGenerator();
-      const acceptanceCriteria = config.acceptanceCriteria || [];
-      const outputDir = config.outputDir || 'traceqa-proof';
-      
-      await reportGenerator.generateReport(results, acceptanceCriteria, outputDir);
-      
-      logger.newLine();
-      logger.success('✓ Reports generated successfully');
-      logger.info(`  Location: ${path.resolve(outputDir)}/`);
-      
-    } catch (reportError) {
-      logger.error('Failed to generate reports', reportError);
-      // Don't fail the entire test run if report generation fails
-    }
-    
-    // Exit with appropriate code
-    if (results.summary.failed > 0) {
-      process.exit(1);
-    }
+    logger.success('✓ TraceQA execution completed successfully');
+    logger.info(`  Reports location: ${path.resolve(config.outputDir || 'traceqa-proof')}/`);
     
   } catch (error) {
     logger.error('Test execution failed', error);
+    
+    // Provide helpful error messages
+    if (error instanceof Error) {
+      if (error.message.includes('API key')) {
+        logger.newLine();
+        logger.info('💡 Tip: Make sure IBM_WATSONX_API_KEY environment variable is set');
+        logger.info('   You can set it with: traceqa config --api-key YOUR_KEY');
+      } else if (error.message.includes('connection') || error.message.includes('ECONNREFUSED')) {
+        logger.newLine();
+        logger.info('💡 Tip: Make sure your application is running at the specified base URL');
+        logger.info(`   Base URL: ${config.baseUrl}`);
+      }
+    }
+    
     throw error;
   }
 }
