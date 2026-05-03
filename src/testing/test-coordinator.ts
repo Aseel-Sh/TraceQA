@@ -20,6 +20,7 @@ import {
 } from '../generators/artifact-writer.js';
 import { parseAcceptanceCriteriaFromFile } from '../parsers/acceptance-parser.js';
 import { discoverRoutes } from '../discovery/route-discovery.js';
+import { buildAPIMap, type APIMap } from '../validation/api-map-builder.js';
 import { ReportGenerator } from '../reporting/report-generator.js';
 import { generateQATaskPlan } from '../generators/qa-task-plan-generator.js';
 import { generateHTTPTests } from '../generators/http-test-generator.js';
@@ -252,6 +253,22 @@ export class TestCoordinator {
       }
       logger.newLine();
 
+      // Phase 2.5: Build API Map
+      logger.section('Phase 2.5: Building API map');
+      const openApiSpecForMap = await this.loadOpenApiSpec(projectConfig.openapi, acceptancePath);
+      let apiMap: APIMap;
+      try {
+        apiMap = await buildAPIMap(baseUrl, routes, openApiSpecForMap);
+        logger.success(`✓ API map built: ${apiMap.entries.length} endpoints`);
+        if (apiMap.hasOpenAPI) {
+          logger.info('  OpenAPI spec available — high-confidence schemas');
+        }
+      } catch (err) {
+        logger.warn('API map build failed — falling back to discovered routes only');
+        apiMap = { entries: [], sources: [], buildTimestamp: new Date().toISOString(), hasOpenAPI: false };
+      }
+      logger.newLine();
+
       // Phase 3: Prepare per-run debug directory and skip redundant AI suggestions by default
       logger.section('Phase 3: Preparing debug output');
       try {
@@ -262,6 +279,13 @@ export class TestCoordinator {
         // Expose run debug directory so downstream modules may write into it
         process.env.TRACEQA_DEBUG_DIR = runDir;
         logger.info(`Debug output directory: ${runDir}`);
+
+        // Write API map for transparency
+        try {
+          const mapPath = path.join(runDir, 'api-map.json');
+          await fs.writeJSON(mapPath, apiMap, { spaces: 2 });
+          logger.debug(`API map written to ${mapPath}`);
+        } catch { /* non-fatal */ }
       } catch (err) {
         logger.warn('Failed to prepare per-run debug directory');
       }
@@ -280,7 +304,7 @@ export class TestCoordinator {
         timeout: 30000,
       };
       
-      const openApiSpec = await this.loadOpenApiSpec(projectConfig.openapi, acceptancePath);
+      const openApiSpec = openApiSpecForMap;
 
       const projectContext = {
         projectName: projectConfig.projectName || 'TraceQA Project',
@@ -290,6 +314,7 @@ export class TestCoordinator {
         healthUrl: projectConfig.healthUrl,
         openApiSpec,
         routeSources: routes.map(route => route.file).filter((file): file is string => !!file),
+        apiMap,
       };
       
       const qaTaskPlanResult = await generateQATaskPlan(

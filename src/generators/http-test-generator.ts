@@ -32,6 +32,12 @@ import {
   type BodyGenerationResult,
   type TestDataContext,
 } from '../validation/body-generator.js';
+import {
+  findMapEntryForAC,
+  generateBodyFromMapEntry,
+  generateNegativeBody,
+  type APIMap,
+} from '../validation/api-map-builder.js';
 import { assessTestDataConfidence } from '../validation/test-data-inference.js';
 import { logger } from '../utils/logger.js';
 import { safeExtractJSON } from '../utils/json-extractor.js';
@@ -57,6 +63,8 @@ export interface ProjectContext {
   language?: string;
   openApiSpec?: any;
   routeSources?: string[];
+  /** Unified API map built before test generation */
+  apiMap?: APIMap;
 }
 
 interface IBMGeneratedHTTPTestResponse {
@@ -842,7 +850,8 @@ async function generateTestsFromTask(
     acceptanceCriterion,
     discoveredRoutes,
     config,
-    projectContext.baseUrl
+    projectContext.baseUrl,
+    projectContext.apiMap,
   )];
 }
 
@@ -1418,7 +1427,8 @@ function generateFallbackTest(
   acceptanceCriterion: AcceptanceCriterion,
   discoveredRoutes: DiscoveredRoute[],
   config: TraceQAConfig,
-  baseUrl: string
+  baseUrl: string,
+  apiMap?: APIMap,
 ): GeneratedHTTPTest {
   logger.debug(`Generating fallback test for task ${task.taskId}`);
 
@@ -1488,14 +1498,33 @@ function generateFallbackTest(
       acceptableStatuses: expected.acceptableStatuses,
     }];
   } else {
-    // Single step test for mutating routes
-    const bodyResult = generateRequestBody(
-      routeMatch.route.method,
-      routeMatch.route,
-      task,
-      acceptanceCriterion,
-      config
-    );
+    // Single step test for mutating routes — prefer API map body
+    let bodyResult: BodyGenerationResult;
+    const mapEntry = apiMap ? findMapEntryForAC(apiMap, acceptanceCriterion.description, task.title) : null;
+
+    if (mapEntry && mapEntry.method === methodUpper && mapEntry.requestSchema?.properties) {
+      // Use API map schema for body generation
+      const isNeg = isNegativeFallbackCriterion(criterionText);
+      const mapBody = isNeg
+        ? generateNegativeBody(mapEntry, criterionText, task.taskId, Date.now().toString())
+        : generateBodyFromMapEntry(mapEntry, task.taskId, Date.now().toString());
+
+      bodyResult = {
+        body: mapBody,
+        source: 'openapi',
+        confidence: mapBody ? 'high' : 'low',
+        warnings: mapBody ? [] : ['API map entry had no usable schema'],
+      };
+      logger.debug(`Fallback body from API map for ${task.taskId}`);
+    } else {
+      bodyResult = generateRequestBody(
+        routeMatch.route.method,
+        routeMatch.route,
+        task,
+        acceptanceCriterion,
+        config
+      );
+    }
 
     if (bodyResult.source === 'generic_fallback' || bodyResult.confidence === 'low') {
       return buildUncertainFallbackTest(task, acceptanceCriterion, 'No schema or source evidence for a valid request body; fallback stays conservative.');

@@ -130,6 +130,19 @@ export function generateRequestBody(
     }
   }
 
+  // Priority 1.5: Route-attached requestSchema (from API map or OpenAPI-enriched discovery)
+  if (route?.requestSchema?.properties) {
+    const schemaBody = generateFromRouteSchema(route.requestSchema, scenario, testId, timestamp);
+    if (schemaBody && Object.keys(schemaBody).length > 0) {
+      return {
+        body: schemaBody,
+        source: 'openapi',
+        confidence: 'high',
+        warnings,
+      };
+    }
+  }
+
   // Priority 2: IBM suggested body (if valid)
   if (ibmSuggestedBody && typeof ibmSuggestedBody === 'object') {
     const keys = Object.keys(ibmSuggestedBody);
@@ -1496,6 +1509,63 @@ export function validateGeneratedBody(
   }
 
   return warnings;
+}
+
+/**
+ * Generate a request body from a route-attached requestSchema.
+ * Used when a DiscoveredRoute (or API map entry) has a requestSchema
+ * but no full OpenAPI spec file is available.
+ *
+ * @param schema - The requestSchema object with properties/required fields
+ * @param scenario - Body scenario (valid or invalid)
+ * @param testId - Test identifier for unique values
+ * @param timestamp - Timestamp for unique values
+ * @returns Generated body or null
+ */
+function generateFromRouteSchema(
+  schema: { required?: string[]; properties?: Record<string, any>; type?: string; [key: string]: any },
+  scenario: BodyScenario,
+  testId: string,
+  timestamp: string,
+): Record<string, any> | null {
+  if (!schema.properties) return null;
+
+  const body: Record<string, any> = {};
+  const required = schema.required || [];
+
+  // Generate required fields first
+  for (const fieldName of required) {
+    const fieldSchema = schema.properties[fieldName];
+    if (fieldSchema) {
+      body[fieldName] = generateFieldValue(
+        fieldName,
+        fieldSchema,
+        scenario,
+        testId,
+        timestamp,
+        undefined,
+        true
+      );
+    } else {
+      body[fieldName] = generateValueFromFieldName(fieldName, testId);
+    }
+  }
+
+  // Generate optional fields
+  for (const [fieldName, fieldSchema] of Object.entries(schema.properties)) {
+    if (required.includes(fieldName)) continue;
+    body[fieldName] = generateFieldValue(
+      fieldName,
+      fieldSchema,
+      scenario,
+      testId,
+      timestamp,
+      undefined,
+      false
+    );
+  }
+
+  return Object.keys(body).length > 0 ? body : null;
 }
 
 // Made with Bob
