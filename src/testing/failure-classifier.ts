@@ -418,14 +418,18 @@ export function isConfigurationError(error: string): boolean {
   const errorLower = error.toLowerCase();
   
   const configPhrases = [
-    'invalid',
-    'missing',
-    'configuration',
-    'malformed',
+    'invalid url',
+    'invalid test configuration',
+    'missing url',
+    'missing endpoint',
+    'configuration error',
+    'malformed url',
     'parse error',
-    'invalid json',
-    'invalid body',
-    'invalid header'
+    'invalid json input',
+    'invalid body format',
+    'invalid header format',
+    'no endpoint',
+    'no base url',
   ];
 
   return configPhrases.some(phrase => errorLower.includes(phrase));

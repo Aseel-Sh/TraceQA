@@ -498,15 +498,16 @@ export class TestCoordinator {
       logger.keyValue('  - Manual', qaTaskPlan.summary.manualTasks.toString());
       logger.keyValue('  - Uncertain', qaTaskPlan.summary.uncertainTasks.toString());
       logger.newLine();
-      logger.keyValue('Total HTTP Tests', testSuite.summary.totalTests.toString());
+      logger.keyValue('Total HTTP Tests', testSuite.summary.totalGenerated.toString());
       logger.keyValue('  - Ready', testSuite.summary.readyTests.toString());
       logger.keyValue('  - Uncertain', testSuite.summary.uncertainTests.toString());
       logger.keyValue('  - Manual', testSuite.summary.manualTests.toString());
       logger.newLine();
       logger.keyValue('Execution Results', '');
+      logger.keyValue('  - Executed', (passed + failed).toString());
       logger.keyValue('  - Passed', passed.toString());
       logger.keyValue('  - Failed', failed.toString());
-      logger.keyValue('  - Skipped', (uncertainTests.length + manualTests.length).toString());
+      logger.keyValue('  - Skipped (uncertain + manual)', (uncertainTests.length + manualTests.length).toString());
       logger.newLine();
       logger.keyValue('Artifacts', generatedDir + '/');
       logger.keyValue('Reports', proofDir + '/');

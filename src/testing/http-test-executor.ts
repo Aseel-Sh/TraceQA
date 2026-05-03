@@ -953,7 +953,9 @@ function classifyTestResult(
       if (error.includes('invalid url') ||
           error.includes('malformed') ||
           error.includes('typeerror') ||
-          error.includes('failed to parse')) {
+          error.includes('failed to parse') ||
+          error.includes('unresolved variable') ||
+          error.includes('unresolved placeholder')) {
         return true;
       }
 
@@ -961,17 +963,44 @@ function classifyTestResult(
       if (error.includes('econnrefused') && result.url && result.url.includes('localhost')) {
         return true;
       }
-    }
 
-    // If server returned 422 and response body hints at enum/validation, treat as generation issue
-    if (result.actualStatus === 422 && result.responseBody) {
-      const hints = extractAllowedValuesFromResponse(result.responseBody as any);
-      if (hints && Object.keys(hints).length > 0) {
+      // Skipped due to setup failure = generation issue, not app failure
+      if (error.includes('skipped:')) {
         return true;
       }
-      // Also inspect response body strings for "one of" patterns
-      if (typeof result.responseBody === 'string' && /one of/i.test(result.responseBody)) {
+    }
+
+    // 404 from the server usually means the route was wrong (generation issue)
+    if (result.actualStatus === 404 && !result.passed) {
+      return true;
+    }
+
+    // If server returned 400/422 and response body hints at validation errors,
+    // treat as generation issue (bad generated data, not an app bug)
+    if ((result.actualStatus === 400 || result.actualStatus === 422) && !result.passed) {
+      // Check for validation error patterns in response
+      const responseText = typeof result.responseBody === 'string'
+        ? result.responseBody.toLowerCase()
+        : JSON.stringify(result.responseBody || '').toLowerCase();
+
+      const validationPatterns = [
+        'required field', 'missing required', 'invalid enum', 'must be one of',
+        'validation error', 'validation failed', 'invalid value', 'field is required',
+        'not a valid', 'does not match', 'is required', 'not allowed',
+        'invalid type', 'expected type', 'must match', 'cannot be empty',
+        'must not be empty', 'invalid format', 'bad request', 'one of'
+      ];
+
+      if (validationPatterns.some(p => responseText.includes(p))) {
         return true;
+      }
+
+      // Also check for structured validation hints
+      if (result.responseBody && typeof result.responseBody === 'object') {
+        const hints = extractAllowedValuesFromResponse(result.responseBody as any);
+        if (hints && Object.keys(hints).length > 0) {
+          return true;
+        }
       }
     }
 
@@ -979,7 +1008,9 @@ function classifyTestResult(
   });
 
   if (generationIssues.length > 0) {
-    const reasons = generationIssues.map(r => r.error).join('; ');
+    const reasons = generationIssues
+      .map(r => r.error || `Status ${r.actualStatus} indicates route/data mismatch`)
+      .join('; ');
     return {
       classification: TestFailureClassification.TRACEQA_GENERATION_ISSUE,
       reason: `Test generation issues detected: ${reasons}`,
@@ -1007,13 +1038,26 @@ function classifyTestResult(
     };
   }
 
-  // Otherwise, it's an application failure
-  // The app returned a response, but it didn't match expectations
+  // Check for true application failures: only 5xx responses qualify
   const failedSteps = stepResults.filter(r => !r.passed);
+  const has5xx = failedSteps.some(r => r.actualStatus >= 500 && r.actualStatus < 600);
+
+  if (has5xx) {
+    return {
+      classification: TestFailureClassification.APPLICATION_FAILURE,
+      reason: `Application returned server error (5xx) in ${failedSteps.filter(r => r.actualStatus >= 500).length} step(s)`,
+      confidence: 0.85,
+      metadata: { failedSteps: failedSteps.length, totalSteps: stepResults.length }
+    };
+  }
+
+  // For any other non-5xx failure, classify as uncertain rather than application_failure.
+  // Without evidence that the route, body, and expectation were all valid and justified,
+  // we cannot confidently blame the application.
   return {
-    classification: TestFailureClassification.APPLICATION_FAILURE,
-    reason: `Application returned unexpected responses in ${failedSteps.length} step(s)`,
-    confidence: 0.8,
+    classification: TestFailureClassification.UNCERTAIN,
+    reason: `Test failed but cause is ambiguous — status ${failedSteps.map(r => r.actualStatus).join(',')} does not clearly indicate an application bug or a generation issue`,
+    confidence: 0.5,
     metadata: { failedSteps: failedSteps.length, totalSteps: stepResults.length }
   };
 }

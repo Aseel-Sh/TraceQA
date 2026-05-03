@@ -1100,17 +1100,37 @@ export class TestNormalizer {
     // Check 5: Route matches discovered routes (using unified matcher from Issue #1)
     if (this.discoveredRoutes && this.discoveredRoutes.length > 0) {
       const urlPath = url.split('?')[0].split('#')[0]; // Remove query and fragment
+      // Extract just the path portion (remove base URL)
+      let pathOnly = urlPath;
+      try {
+        if (urlPath.startsWith('http://') || urlPath.startsWith('https://')) {
+          pathOnly = new URL(urlPath).pathname;
+        }
+      } catch { /* keep urlPath */ }
+
       const matchingRoute = this.discoveredRoutes.find(route => {
         const methodMatches = route.method.toUpperCase() === method.toUpperCase();
         // Use unified path matching - handles all parameter formats and concrete IDs
-        return methodMatches && matchesPathTemplate(route.path, urlPath);
+        return methodMatches && matchesPathTemplate(route.path, pathOnly);
       });
 
       if (!matchingRoute) {
-        return {
-          ready: false,
-          reason: `UNCERTAIN: Route ${method.toUpperCase()} ${urlPath} does not match any discovered route. This may indicate a typo, undiscovered endpoint, or incorrect test generation.`
-        };
+        // SAFE REPAIR: Try suffix matching (e.g. /items matches discovered /api/items)
+        const normalizedPath = pathOnly.replace(/\/$/, '');
+        const suffixMatches = this.discoveredRoutes.filter(route => {
+          if (route.method.toUpperCase() !== method.toUpperCase()) return false;
+          const candidatePath = route.path.replace(/\/$/, '');
+          return candidatePath.endsWith(normalizedPath) && candidatePath !== normalizedPath;
+        });
+
+        if (suffixMatches.length !== 1) {
+          return {
+            ready: false,
+            reason: `UNCERTAIN: Route ${method.toUpperCase()} ${pathOnly} does not match any discovered route. This may indicate a typo, undiscovered endpoint, or incorrect test generation.`
+          };
+        }
+        // Single unambiguous suffix match — accept it
+        logger.debug(`Safe prefix repair in readiness check: ${pathOnly} accepted via ${suffixMatches[0].path}`);
       }
     }
 

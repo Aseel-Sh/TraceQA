@@ -536,7 +536,28 @@ function normalizeGeneratedTest(
       });
     }
 
-    const routeHint = findRouteHint(stepPath, method, discoveredRoutes);
+    let routeHint = findRouteHint(stepPath, method, discoveredRoutes);
+
+    // SAFE REPAIR: If the path doesn't match, try prefix repair.
+    // e.g. IBM generated /items but discovered route is /api/items.
+    // Only repair when there is exactly one unambiguous suffix match.
+    if (discoveredRoutes.length > 0 && !routeHint.matched) {
+      const normalizedStepPath = stepPath.split('?')[0].replace(/\/$/, '');
+      const suffixMatches = discoveredRoutes.filter(candidate => {
+        if (candidate.method.toUpperCase() !== method) return false;
+        const candidatePath = candidate.path.replace(/\/$/, '');
+        // Check if discovered route ends with the step path
+        return candidatePath.endsWith(normalizedStepPath) && candidatePath !== normalizedStepPath;
+      });
+
+      if (suffixMatches.length === 1) {
+        // Unambiguous prefix repair
+        logger.info(`Safe repair: replacing path ${stepPath} with discovered ${suffixMatches[0].path}`);
+        stepPath = suffixMatches[0].path;
+        routeHint = { matched: true, route: suffixMatches[0] };
+      }
+    }
+
     if (discoveredRoutes.length > 0 && !routeHint.matched) {
       return createUncertainTest({
         task,
@@ -615,14 +636,30 @@ function normalizeGeneratedTest(
 
   const isAutomated = executionMode === 'automated' && confidence >= 0.7 && warnings.length === 0;
 
+  // CONSISTENCY GUARDS (Issue #7):
+  // 1. A test with no steps must never be ready
+  let finalStatus: 'ready' | 'uncertain' = isAutomated ? 'ready' : 'uncertain';
+  let finalUncertainReason = isAutomated ? null : (uncertainReason || 'IBM output did not meet executable-test validation requirements.');
+
+  if (normalizedSteps.length === 0 && finalStatus === 'ready') {
+    finalStatus = 'uncertain';
+    finalUncertainReason = 'Test has no executable steps.';
+  }
+
+  // 2. If uncertainReason is set and blocking, do not mark ready
+  if (finalStatus === 'ready' && uncertainReason && uncertainReason.trim().length > 0) {
+    finalStatus = 'uncertain';
+    finalUncertainReason = uncertainReason;
+  }
+
   return {
     id: testId,
     qaTaskId: task.taskId,
     acceptanceCriterionId,
     title,
     type: 'api',
-    status: isAutomated ? 'ready' : 'uncertain',
-    uncertainReason: isAutomated ? null : (uncertainReason || 'IBM output did not meet executable-test validation requirements.'),
+    status: finalStatus,
+    uncertainReason: finalStatus === 'ready' ? null : finalUncertainReason,
     steps: normalizedSteps,
     reasoning,
     confidence,
@@ -1408,6 +1445,11 @@ function generateFallbackTest(
     return buildUncertainFallbackTest(task, acceptanceCriterion, 'Safe health-like route was discovered, but the acceptance criterion is unrelated to it.');
   }
 
+  // Also guard against using health routes when AC is about business operations
+  if (isHealthLikeRoute && /\b(register|login|signup|sign.?in|create|add|delete|remove|update|edit|modify|item|user|product|order|inventory|cart|payment|profile|account|password|email|validation|duplicate|conflict)\b/i.test(criterionText)) {
+    return buildUncertainFallbackTest(task, acceptanceCriterion, 'Health route cannot test business logic acceptance criteria.');
+  }
+
   if (methodUpper !== 'GET' && !hasRouteEvidence(routeMatch.route, criterionText)) {
     return buildUncertainFallbackTest(task, acceptanceCriterion, 'Matched route lacks enough source or schema evidence for a safe fallback test.');
   }
@@ -1492,6 +1534,19 @@ function generateFallbackTest(
     bodyGeneration
   );
 
+  // CONSISTENCY GUARD: A test with no steps must never be ready.
+  let finalStatus = statusResult.status;
+  let finalUncertainReason = statusResult.uncertainReason || 'Generated using fallback logic';
+  if (steps.length === 0 && finalStatus === 'ready') {
+    finalStatus = 'uncertain';
+    finalUncertainReason = 'Test has no executable steps.';
+  }
+  // A test with an uncertainReason that indicates a blocker must not be ready.
+  if (finalStatus === 'ready' && finalUncertainReason &&
+      /no (discovered|schema|route|evidence|body)/i.test(finalUncertainReason)) {
+    finalStatus = 'uncertain';
+  }
+
   const taskNumber = task.taskId.replace('QA-', '');
   return {
     id: `TC-${taskNumber}-1`,
@@ -1500,8 +1555,8 @@ function generateFallbackTest(
     title: task.title,
     type: task.type === 'uncertain' ? 'api' : task.type,
     steps,
-    status: statusResult.status,
-    uncertainReason: statusResult.uncertainReason || 'Generated using fallback logic',
+    status: finalStatus,
+    uncertainReason: finalStatus === 'ready' ? null : finalUncertainReason,
   };
 }
 
@@ -1593,8 +1648,13 @@ function routePathHasParameters(path: string): boolean {
 }
 
 function isHealthLikeSafeRoute(path: string): boolean {
-  const normalized = path.toLowerCase();
-  return normalized === '/health' || normalized === '/status' || normalized === '/healthz' || normalized === '/ready' || normalized === '/live';
+  const normalized = path.toLowerCase().replace(/\/$/, '');
+  const healthPatterns = [
+    '/health', '/healthz', '/status', '/ready', '/readyz',
+    '/live', '/livez', '/ping', '/api/health', '/api/status',
+    '/api/ping', '/_health', '/_status',
+  ];
+  return healthPatterns.includes(normalized);
 }
 
 /**
