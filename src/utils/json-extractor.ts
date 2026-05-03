@@ -167,9 +167,7 @@ function analyzeJSONError(text: string): ExtractionResult['errorDetails'] {
   
   // Check if JSON markers exist
   const hasOpenBrace = trimmed.includes('{');
-  const hasCloseBrace = trimmed.includes('}');
   const hasOpenBracket = trimmed.includes('[');
-  const hasCloseBracket = trimmed.includes(']');
   
   if (!hasOpenBrace && !hasOpenBracket) {
     return {

@@ -564,4 +564,77 @@ export function extractCodeBlocks(response: string): Array<{ language: string; c
   return blocks;
 }
 
+/**
+ * Create a compact schema summary from route information
+ * Extracts only essential info to minimize prompt size
+ */
+export function createSchemaSummary(routes: any[]): string {
+  if (!routes || routes.length === 0) {
+    return 'No routes available';
+  }
+  
+  // Take only first 5 routes to keep it compact
+  const limitedRoutes = routes.slice(0, 5);
+  
+  return limitedRoutes.map(r => {
+    let summary = `${r.method} ${r.path}`;
+    
+    // Add only essential schema info if available
+    if (r.requestSchema) {
+      const required = r.requestSchema.required || [];
+      if (required.length > 0) {
+        summary += ` (requires: ${required.slice(0, 3).join(', ')})`;
+      }
+    }
+    
+    return summary;
+  }).join('; ');
+}
+
+/**
+ * Ultra-compact prompt for single test generation (IBM truncation fix)
+ */
+export function getCompactSingleTestPrompt(
+  acceptanceCriterion: any,
+  routes: any[],
+  baseUrl: string,
+  retryLevel: number = 0
+): string {
+  const routeSummary = createSchemaSummary(routes);
+  
+  if (retryLevel > 0) {
+    // Ultra-minimal retry prompt — very small and strict
+    return `AC:${acceptanceCriterion.id} Routes:${routeSummary} Base:${baseUrl} RETURN ONLY JSON: [{"id":"${acceptanceCriterion.id}","acceptanceCriterionId":"${acceptanceCriterion.id}","status":"ready","uncertainReason":"","steps":[{"method":"GET","path":"/path","expectedStatus":200}]}]`;
+  }
+  
+  // Compact first attempt
+  return `Generate exactly ONE test for AC ${acceptanceCriterion.id}.
+AC: ${acceptanceCriterion.description || acceptanceCriterion.criterion}
+Expected: ${acceptanceCriterion.expectedResult || 'Not specified'}
+Routes: ${routeSummary}
+Base: ${baseUrl}
+
+RETURN STRICT JSON ONLY. NO MARKDOWN, NO PROSE, NO EXPLANATIONS, NO EXTRA FIELDS.
+Output MUST match this compact schema exactly:
+[{"id":"${acceptanceCriterion.id}","acceptanceCriterionId":"${acceptanceCriterion.id}","status":"ready|uncertain|manual","uncertainReason":"","steps":[{"method":"GET","path":"/path","url":"${baseUrl}/path","headers":{},"body":null,"expectedStatus":200}]}]
+
+If uncertain, set "status" to "uncertain" and provide a short "uncertainReason" (one short sentence).`;
+}
+
+/**
+ * Compact batch test generation prompt (fallback)
+ */
+export function getCompactBatchTestPrompt(
+  acceptanceCriteria: any[],
+  routes: any[],
+  baseUrl: string
+): string {
+  const routeSummary = createSchemaSummary(routes);
+  const acList = acceptanceCriteria.slice(0, 3).map(ac =>
+    `${ac.id}: ${ac.description || ac.criterion}`
+  ).join('; ');
+  
+  return `Generate tests for: ${acList}. Routes: ${routeSummary}. Base: ${baseUrl}. Return JSON array only: [{"id":"AC-1","acceptanceCriterionId":"AC-1","status":"ready","steps":[]}]`;
+}
+
 // Made with Bob

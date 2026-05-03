@@ -1001,6 +1001,65 @@ export class TestNormalizer {
    * @param normalized - Normalized test result
    * @returns Object indicating if test is ready and reason if not
    */
+  /**
+   * Detect guessed IDs in URLs for existing-resource tests
+   * Gap 2: Flag suspicious concrete numeric IDs when no setup step exists
+   */
+  private detectGuessedID(url: string, method: string, test: any): {
+    hasGuessedID: boolean;
+    reason?: string;
+  } {
+    // Only check for methods that operate on existing resources
+    const existingResourceMethods = ['PUT', 'PATCH', 'DELETE', 'GET'];
+    if (!existingResourceMethods.includes(method.toUpperCase())) {
+      return { hasGuessedID: false };
+    }
+
+    // Check if test has setup steps (variable capture)
+    const hasSetup = test.steps?.some((step: any) =>
+      step.captureVariables && Object.keys(step.captureVariables).length > 0
+    );
+
+    if (hasSetup) {
+      // Setup exists, so concrete IDs are okay (will be replaced with captured values)
+      return { hasGuessedID: false };
+    }
+
+    // Check if this is a 404 test (testing missing resources)
+    const description = test.description?.toLowerCase() || '';
+    const name = test.name?.toLowerCase() || '';
+    const is404Test = description.includes('not found') ||
+                      description.includes('missing') ||
+                      description.includes('404') ||
+                      name.includes('not found') ||
+                      name.includes('missing') ||
+                      name.includes('404');
+
+    if (is404Test) {
+      // 404 tests are expected to use non-existent IDs
+      return { hasGuessedID: false };
+    }
+
+    // Patterns for suspicious guessed IDs
+    const guessedIDPatterns = [
+      { pattern: /\/\w+\/\d{1,2}(?=\/|$|\?)/, desc: 'single/double digit ID' },
+      { pattern: /\/\w+\/123(?=\/|$|\?)/, desc: 'placeholder 123' },
+      { pattern: /\/\w+\/999(?=\/|$|\?)/, desc: 'placeholder 999' },
+      { pattern: /\/\w+\/test(?=\/|$|\?)/i, desc: 'test ID' },
+    ];
+
+    for (const { pattern, desc } of guessedIDPatterns) {
+      if (pattern.test(url)) {
+        return {
+          hasGuessedID: true,
+          reason: `URL contains suspicious ${desc} without setup step`
+        };
+      }
+    }
+
+    return { hasGuessedID: false };
+  }
+
   isTestReady(normalized: NormalizedTest): { ready: boolean; reason?: string } {
     // Check 1: Basic validity first
     if (!normalized.isValid) {
@@ -1053,6 +1112,19 @@ export class TestNormalizer {
           reason: `UNCERTAIN: Route ${method.toUpperCase()} ${urlPath} does not match any discovered route. This may indicate a typo, undiscovered endpoint, or incorrect test generation.`
         };
       }
+    }
+
+    // Check 5.5: Guessed ID detection (Gap 2)
+    const guessedIDCheck = this.detectGuessedID(url, method, normalized.originalTestCase);
+    if (guessedIDCheck.hasGuessedID) {
+      logger.warn(
+        'Test has guessed ID',
+        `Test: ${normalized.config.name}, URL: ${url}, Method: ${method}, Reason: ${guessedIDCheck.reason}`
+      );
+      return {
+        ready: false,
+        reason: `UNCERTAIN: ${guessedIDCheck.reason || 'URL contains guessed ID without setup'}`
+      };
     }
 
     // Check 6: Valid expected status code

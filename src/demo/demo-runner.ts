@@ -197,7 +197,9 @@ export class DemoRunner {
 
     const totalTests = results.length;
     const passedTests = results.filter(r => r.result.passed).length;
-    const failedTests = totalTests - passedTests;
+    const failedTests = results.filter(r => this.isFailedMockResult(r.result)).length;
+    const uncertainTests = results.filter(r => this.isUncertainMockResult(r.result)).length;
+    const skippedTests = results.filter(r => this.isSkippedMockResult(r.result)).length;
     const passRate = (passedTests / totalTests) * 100;
 
     // Generate markdown report
@@ -211,6 +213,8 @@ export class DemoRunner {
         total: totalTests,
         passed: passedTests,
         failed: failedTests,
+        uncertain: uncertainTests,
+        skipped: skippedTests,
         passRate: passRate.toFixed(1),
       },
       acceptanceCriteria: DEMO_ACCEPTANCE_CRITERIA,
@@ -261,7 +265,7 @@ export class DemoRunner {
     report += '## Summary\n\n';
     report += `- **Total Tests:** ${totalTests}\n`;
     report += `- **Passed:** ${passedTests} (${passRate.toFixed(1)}%)\n`;
-    report += `- **Failed:** ${failedTests} (${(100 - passRate).toFixed(1)}%)\n`;
+    report += `- **Failed:** ${failedTests} (${((failedTests / totalTests) * 100).toFixed(1)}%)\n`;
     report += `- **Merge Readiness:** ${mergeStatus} (Score: ${mergeScore}/100)\n\n`;
 
     report += '## Acceptance Criteria\n\n';
@@ -295,7 +299,9 @@ export class DemoRunner {
   private printSummary(results: Array<{ test: MockTestCase; result: any }>): void {
     const totalTests = results.length;
     const passedTests = results.filter(r => r.result.passed).length;
-    const failedTests = totalTests - passedTests;
+    const failedTests = results.filter(r => this.isFailedMockResult(r.result)).length;
+    const uncertainTests = results.filter(r => this.isUncertainMockResult(r.result)).length;
+    const skippedTests = results.filter(r => this.isSkippedMockResult(r.result)).length;
     const passRate = (passedTests / totalTests) * 100;
     const mergeScore = Math.floor(passRate);
     const mergeStatus = mergeScore >= 90 ? '✅ READY' : mergeScore >= 70 ? '⚠️ REVIEW NEEDED' : '❌ NOT READY';
@@ -303,7 +309,9 @@ export class DemoRunner {
     console.log('📊 Test Results:');
     console.log(`   Total: ${totalTests}`);
     console.log(`   Passed: ${passedTests} (${passRate.toFixed(1)}%)`);
-    console.log(`   Failed: ${failedTests} (${(100 - passRate).toFixed(1)}%)`);
+    console.log(`   Failed: ${failedTests} (${((failedTests / totalTests) * 100).toFixed(1)}%)`);
+    console.log(`   Uncertain: ${uncertainTests}`);
+    console.log(`   Skipped: ${skippedTests}`);
     console.log('');
     console.log(`   Merge Readiness: ${mergeStatus} (Score: ${mergeScore}/100)`);
     console.log('');
@@ -325,6 +333,24 @@ export class DemoRunner {
     console.log('');
     console.log('   For more information: traceqa --help');
     console.log('');
+  }
+
+  private isFailedMockResult(result: any): boolean {
+    const status = typeof result?.status === 'string' ? result.status.toLowerCase() : '';
+    if (status === 'uncertain' || status === 'skipped' || status === 'manual') {
+      return false;
+    }
+    return result?.passed === false;
+  }
+
+  private isUncertainMockResult(result: any): boolean {
+    const status = typeof result?.status === 'string' ? result.status.toLowerCase() : '';
+    return status === 'uncertain';
+  }
+
+  private isSkippedMockResult(result: any): boolean {
+    const status = typeof result?.status === 'string' ? result.status.toLowerCase() : '';
+    return status === 'skipped';
   }
 }
 

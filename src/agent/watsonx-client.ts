@@ -16,6 +16,68 @@ import {
 import { logger } from '../utils/logger.js';
 
 /**
+ * Normalize model response into a string.
+ * Accepts string, object, Buffer, null, undefined.
+ * If object, attempts to extract likely text fields before falling back to JSON.
+ */
+function normalizeModelText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+
+  if (typeof value === 'string') return value;
+
+  if (Buffer.isBuffer(value)) {
+    try {
+      return value.toString('utf8');
+    } catch {
+      return String(value);
+    }
+  }
+
+  if (typeof value === 'object') {
+    const v: any = value as any;
+
+    // Common candidate fields in various IBM/watsonx responses
+    const candidates = [
+      v?.text,
+      v?.output,
+      v?.result,
+      v?.generated_text,
+      v?.results?.[0]?.generated_text,
+      v?.results?.[0]?.output_text,
+      v?.choices?.[0]?.text,
+      v?.choices?.[0]?.message?.content,
+      v?.results,
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate === null || candidate === undefined) continue;
+      if (typeof candidate === 'string') return candidate;
+      if (Buffer.isBuffer(candidate)) return candidate.toString('utf8');
+      // If candidate is an object with a string field, try stringify or drill further
+      if (typeof candidate === 'object') {
+        // If it's a simple object with text-like properties, try to find them
+        if (typeof candidate.text === 'string') return candidate.text;
+        if (typeof candidate.generated_text === 'string') return candidate.generated_text;
+        if (typeof candidate.output_text === 'string') return candidate.output_text;
+        // If it's an array-like chunk that contains strings, join them
+        if (Array.isArray(candidate)) {
+          const strs = candidate.filter((x: any) => typeof x === 'string');
+          if (strs.length > 0) return strs.join('');
+        }
+      }
+    }
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  // Fallback to string conversion for other types
+  return String(value);
+}
+/**
  * IBM watsonx.ai API client for TraceQA agent
  */
 export class WatsonxClient {
@@ -124,7 +186,7 @@ export class WatsonxClient {
       temperature?: number;
       maxTokens?: number;
     }
-  ): Promise<string> {
+  ): Promise<{ text: string; truncated: boolean; stopReason?: string }> {
     const startTime = Date.now();
 
     try {
@@ -155,21 +217,24 @@ export class WatsonxClient {
         });
       });
 
-      // Extract response text
-      const responseText = response.result.results[0].generated_text;
+      // Extract response text (normalize safely)
+      const rawCandidate = response?.result?.results?.[0]?.generated_text ?? response?.result ?? response;
+      const responseText = normalizeModelText(rawCandidate);
       const inputTokens = response.result.results[0].input_token_count || 0;
       const outputTokens = response.result.results[0].generated_token_count || 0;
       const stopReason = response.result.results[0].stop_reason;
 
-      // Log response metadata for debugging (Issue #9)
-      logger.debug(`Response metadata: length=${responseText.length} chars, inputTokens=${inputTokens}, outputTokens=${outputTokens}, stopReason=${stopReason}`);
+      // Enhanced truncation detection
+      const isTruncated = this.detectTruncation(responseText, stopReason, outputTokens, options?.maxTokens);
       
-      // Check for potential truncation
-      if (stopReason === 'max_tokens' || stopReason === 'length') {
-        logger.warn(`⚠️ Response may be truncated (stop_reason: ${stopReason})`);
+      // Log response metadata for debugging
+      logger.debug(`Response metadata: length=${responseText.length} chars, inputTokens=${inputTokens}, outputTokens=${outputTokens}, stopReason=${stopReason}, truncated=${isTruncated}`);
+      
+      if (isTruncated) {
+        logger.warn(`⚠️ Response truncated (stop_reason: ${stopReason})`);
       }
 
-      // Add assistant response to history
+      // Add assistant response to history (ensure string)
       this.addToHistory('assistant', responseText, {
         tokenCount: outputTokens,
         model: this.model,
@@ -182,7 +247,7 @@ export class WatsonxClient {
       const duration = Date.now() - startTime;
       logger.success(`Received response from watsonx.ai (${duration}ms, ${outputTokens} tokens)`);
 
-      return responseText;
+      return { text: responseText, truncated: isTruncated, stopReason };
     } catch (error) {
       const duration = Date.now() - startTime;
       
@@ -260,7 +325,7 @@ export class WatsonxClient {
           const result = parsedChunk.results[0];
           
           if (result.generated_text) {
-            const text = result.generated_text;
+            const text = normalizeModelText(result.generated_text);
             fullResponse += text;
             yield text;
           }
@@ -458,6 +523,42 @@ export class WatsonxClient {
     }
     
     return 'UNKNOWN';
+  }
+
+  /**
+   * Detect if response was truncated
+   */
+  private detectTruncation(
+    responseText: string,
+    stopReason: string | undefined,
+    outputTokens: number,
+    maxTokens?: number
+  ): boolean {
+    // Check stop reason
+    if (stopReason === 'max_tokens' || stopReason === 'length') {
+      return true;
+    }
+    
+    // Check if output tokens reached the limit
+    const tokenLimit = maxTokens || this.config.maxTokens;
+    if (outputTokens >= tokenLimit * 0.95) { // 95% threshold
+      return true;
+    }
+    
+    // Check for incomplete JSON (common truncation indicator)
+    const trimmed = responseText.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      const openBraces = (trimmed.match(/\{/g) || []).length;
+      const closeBraces = (trimmed.match(/\}/g) || []).length;
+      const openBrackets = (trimmed.match(/\[/g) || []).length;
+      const closeBrackets = (trimmed.match(/\]/g) || []).length;
+      
+      if (openBraces !== closeBraces || openBrackets !== closeBrackets) {
+        return true;
+      }
+    }
+    
+    return false;
   }
 
   /**

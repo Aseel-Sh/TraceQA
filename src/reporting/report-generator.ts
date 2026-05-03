@@ -11,6 +11,7 @@ import {
   GeneratedHTTPTestSuite,
   HTTPTestResult,
   AcceptanceCriterion,
+  TestFailureClassification,
 } from '../types/index.js';
 import { logger, formatDuration } from '../utils/logger.js';
 
@@ -248,20 +249,20 @@ export class ReportGenerator {
       // EXECUTED = tests that actually ran (passed + failed, excludes uncertain/manual/skipped)
       // This aligns with the summary counting logic
       const executedResults = relatedResults.filter(
-        result => result.classification.classification === 'passed' ||
-                  result.classification.classification === 'application_failure' ||
-                  result.classification.classification === 'traceqa_generation_issue' ||
-                  result.classification.classification === 'infrastructure_failure'
+        result => result.classification.classification === TestFailureClassification.PASSED ||
+                  result.classification.classification === TestFailureClassification.APPLICATION_FAILURE ||
+                  result.classification.classification === TestFailureClassification.TRACEQA_GENERATION_ISSUE ||
+                  result.classification.classification === TestFailureClassification.INFRASTRUCTURE_FAILURE
       );
       
       const testsExecuted = executedResults.length;
       const testsPassed = executedResults.filter(
-        r => r.classification.classification === 'passed'
+        r => r.classification.classification === TestFailureClassification.PASSED
       ).length;
       const testsFailed = executedResults.filter(
-        r => r.classification.classification === 'application_failure' ||
-            r.classification.classification === 'traceqa_generation_issue' ||
-            r.classification.classification === 'infrastructure_failure'
+        r => r.classification.classification === TestFailureClassification.APPLICATION_FAILURE ||
+            r.classification.classification === TestFailureClassification.TRACEQA_GENERATION_ISSUE ||
+            r.classification.classification === TestFailureClassification.INFRASTRUCTURE_FAILURE
       ).length;
 
       entries.push({
@@ -345,23 +346,32 @@ export class ReportGenerator {
     const generatedResults = testResults.filter(r => testSuite.tests.some(t => t.id === r.testId));
 
     // Count by classification (these are mutually exclusive)
-    const passed = generatedResults.filter(r => r.classification.classification === 'passed').length;
-    const applicationFailures = generatedResults.filter(r => r.classification.classification === 'application_failure').length;
-    const generationIssues = generatedResults.filter(r => r.classification.classification === 'traceqa_generation_issue').length;
-    const infrastructureFailures = generatedResults.filter(r => r.classification.classification === 'infrastructure_failure').length;
-    const uncertainResults = generatedResults.filter(r => r.classification.classification === 'uncertain').length;
-    const skippedResults = generatedResults.filter(r => r.classification.classification === 'skipped').length;
-    const manualResults = generatedResults.filter(r => r.classification.classification === 'manual').length;
+    // CRITICAL: Use enum values to match TestFailureClassification enum
+    const passed = generatedResults.filter(r => r.classification.classification === TestFailureClassification.PASSED).length;
+    const applicationFailures = generatedResults.filter(r => r.classification.classification === TestFailureClassification.APPLICATION_FAILURE).length;
+    const generationIssues = generatedResults.filter(r => r.classification.classification === TestFailureClassification.TRACEQA_GENERATION_ISSUE).length;
+    const infrastructureFailures = generatedResults.filter(r => r.classification.classification === TestFailureClassification.INFRASTRUCTURE_FAILURE).length;
+    const uncertainResults = generatedResults.filter(r => r.classification.classification === TestFailureClassification.UNCERTAIN).length;
+    const skippedResults = generatedResults.filter(r => r.classification.classification === TestFailureClassification.SKIPPED).length;
+    const manualResults = generatedResults.filter(r => r.classification.classification === TestFailureClassification.MANUAL).length;
 
     // Calculate derived counts
     // EXECUTED = tests that actually ran (passed + all failure types, excludes uncertain/manual/skipped)
     const executed = passed + applicationFailures + generationIssues + infrastructureFailures;
     
-    // FAILED = only tests that ran and had critical failures (excludes advisory warnings)
+    // FAILED = only tests that ran and had critical failures (excludes advisory warnings and uncertain)
     const failed = applicationFailures + generationIssues + infrastructureFailures;
     
-    // NOT EXECUTED = tests that were not run
+    // NOT EXECUTED = tests that were not run (includes uncertain, manual, skipped)
     const notExecuted = uncertainResults + manualResults + skippedResults;
+    
+    // Log classification breakdown for transparency
+    if (uncertainResults > 0) {
+      logger.info(`Classification breakdown: ${uncertainResults} uncertain test(s) excluded from executed and failed counts`);
+    }
+    if (generatedResults.length > 0) {
+      logger.debug(`Test classification: passed=${passed}, failed=${failed} (app=${applicationFailures}, gen=${generationIssues}, infra=${infrastructureFailures}), uncertain=${uncertainResults}, manual=${manualResults}, skipped=${skippedResults}`);
+    }
     
     // Validate count consistency
     const validationErrors = this.validateReportCounts({
@@ -447,8 +457,10 @@ export class ReportGenerator {
    * 1. total = ready + uncertain + manual
    * 2. executed ≤ ready
    * 3. executed = passed + failed
-   * 4. failed = applicationFailures + generationIssues + infrastructureFailures
+   * 4. failed = applicationFailures + generationIssues + infrastructureFailures (NO uncertain)
    * 5. notExecuted = uncertain + manual + skipped
+   * 6. total = executed + notExecuted
+   * 7. CRITICAL: uncertain tests must NOT be in executed or failed counts
    *
    * @param counts - Object containing all count values
    * @returns Array of validation error messages (empty if valid)
@@ -494,7 +506,7 @@ export class ReportGenerator {
       );
     }
     
-    // Rule 4: Failed should equal sum of failure types
+    // Rule 4: Failed should equal sum of failure types (EXCLUDING uncertain)
     const failedCheck = counts.applicationFailures + counts.generationIssues + counts.infrastructureFailures;
     if (counts.failed !== failedCheck) {
       errors.push(
@@ -515,6 +527,21 @@ export class ReportGenerator {
     if (counts.total !== totalCheck2) {
       errors.push(
         `Total count mismatch: total(${counts.total}) != executed(${counts.executed}) + notExecuted(${counts.notExecuted}) = ${totalCheck2}`
+      );
+    }
+    
+    // Rule 7: CRITICAL - Verify uncertain tests are NOT in executed or failed
+    // This is a sanity check - if uncertain > 0 but uncertainResults = 0, something is wrong
+    if (counts.uncertain > 0 && counts.uncertainResults === 0) {
+      errors.push(
+        `CRITICAL: ${counts.uncertain} uncertain tests generated but 0 uncertain results found - uncertain tests may be miscounted`
+      );
+    }
+    
+    // Rule 8: Verify uncertain tests are in notExecuted
+    if (counts.uncertainResults > 0 && counts.uncertainResults > counts.notExecuted) {
+      errors.push(
+        `CRITICAL: uncertainResults(${counts.uncertainResults}) exceeds notExecuted(${counts.notExecuted}) - uncertain tests must be in notExecuted`
       );
     }
     
@@ -803,12 +830,12 @@ export class ReportGenerator {
     md += `## Test Details\n\n`;
 
     // Group by classification (using the classification field properly)
-    const passedTests = testResults.filter(r => r.classification.classification === 'passed');
-    const appFailures = testResults.filter(r => r.classification.classification === 'application_failure');
-    const genIssues = testResults.filter(r => r.classification.classification === 'traceqa_generation_issue');
-    const infraFailures = testResults.filter(r => r.classification.classification === 'infrastructure_failure');
-    const uncertainTests = testResults.filter(r => r.classification.classification === 'uncertain');
-    const manualTests = testResults.filter(r => r.classification.classification === 'manual');
+    const passedTests = testResults.filter(r => r.classification.classification === TestFailureClassification.PASSED);
+    const appFailures = testResults.filter(r => r.classification.classification === TestFailureClassification.APPLICATION_FAILURE);
+    const genIssues = testResults.filter(r => r.classification.classification === TestFailureClassification.TRACEQA_GENERATION_ISSUE);
+    const infraFailures = testResults.filter(r => r.classification.classification === TestFailureClassification.INFRASTRUCTURE_FAILURE);
+    const uncertainTests = testResults.filter(r => r.classification.classification === TestFailureClassification.UNCERTAIN);
+    const manualTests = testResults.filter(r => r.classification.classification === TestFailureClassification.MANUAL);
 
     // Passed Tests
     if (passedTests.length > 0) {

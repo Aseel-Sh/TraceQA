@@ -143,16 +143,16 @@ class IBMSmokeTest {
       const response = await client.sendMessage(testMessage);
       const duration = Date.now() - startTime;
 
-      if (response && response.length > 0) {
+      if (response && response.text.length > 0) {
         this.addResult({
           name: 'Send Message',
           passed: true,
           message: 'Successfully sent message and received response',
-          details: `Response length: ${response.length} characters, Duration: ${duration}ms`,
+          details: `Response length: ${response.text.length} characters, Duration: ${duration}ms`,
         });
         console.log(chalk.green('  ✓ Successfully sent message and received response'));
         console.log(chalk.gray(`    Duration: ${duration}ms`));
-        console.log(chalk.gray(`    Response preview: ${response.substring(0, 100)}...`));
+        console.log(chalk.gray(`    Response preview: ${response.text.substring(0, 100)}...`));
       } else {
         this.addResult({
           name: 'Send Message',

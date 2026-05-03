@@ -472,7 +472,7 @@ export function generateTaskSummary(tasks: QATask[]): {
  * @param debugDir - Debug directory path
  * @param attemptNumber - Attempt number for unique filename
  */
-function saveRawOutput(output: string, debugDir: string, attemptNumber: number): void {
+function saveRawOutput(output: unknown, debugDir: string, attemptNumber: number): void {
   try {
     if (!fs.existsSync(debugDir)) {
       fs.mkdirSync(debugDir, { recursive: true });
@@ -481,7 +481,9 @@ function saveRawOutput(output: string, debugDir: string, attemptNumber: number):
     const filename = `qa-task-plan-raw-${attemptNumber}-${Date.now()}.txt`;
     const filepath = path.join(debugDir, filename);
 
-    fs.writeFileSync(filepath, output, 'utf-8');
+    // If output isn't a string, write pretty JSON for readability
+    const toWrite = typeof output === 'string' ? output : JSON.stringify(output, null, 2);
+    fs.writeFileSync(filepath, toWrite, 'utf-8');
     logger.debug(`Saved raw IBM output to ${filepath}`);
   } catch (error) {
     logger.warn('Failed to save raw IBM output', error instanceof Error ? error.message : String(error));
@@ -559,11 +561,16 @@ export async function generateQATaskPlan(
     const prompt = buildQATaskPlanPrompt(acceptanceCriteria, discoveredRoutes, projectContext);
     const response = await watsonxClient.sendMessage(prompt);
 
-    // Save raw response for debugging
+    // Save raw response for debugging (ensure string or JSON)
     saveRawOutput(response, debugDir, 1);
 
+    // Normalize response to string before JSON extraction. Prefer `text` field when present.
+    const responseText = (response && typeof response === 'object' && 'text' in response)
+      ? (response as any).text
+      : (typeof response === 'string' ? response : JSON.stringify(response));
+
     // Try to extract JSON from response
-    const extractionResult = safeExtractJSON(response, {
+    const extractionResult = safeExtractJSON(responseText, {
       saveRawOnFailure: true,
       attemptRepair: false,
     });
@@ -572,8 +579,8 @@ export async function generateQATaskPlan(
       logger.warn('Failed to extract JSON from IBM response');
       warnings.push('IBM returned invalid JSON format');
 
-      // Try balanced JSON extraction as fallback
-      const extracted = extractJSON(response);
+      // Try balanced JSON extraction as fallback on the stringified response
+      const extracted = extractJSON(responseText);
       if (extracted) {
         logger.info('Successfully extracted JSON using balanced extraction');
         const validation = validateIBMTaskPlanResponse(extracted, acceptanceCriteria);

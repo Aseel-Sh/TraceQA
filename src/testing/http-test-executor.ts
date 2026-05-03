@@ -753,7 +753,7 @@ function extractAllowedValuesFromResponse(body: any): Record<string, any[]> | nu
     if (typeof body.message === 'string') {
       const m = body.message.match(/one of[:]?\s*([^\n]+)/i);
       if (m && m[1]) {
-        const vals = m[1].split(/,\s*/).map(s => s.replace(/^['"]|['"]$/g, ''));
+        const vals = m[1].split(/,\s*/).map((s: string) => s.replace(/^['"]|['"]$/g, ''));
         // No field name — return a generic hint for top-level
         return { '': vals };
       }
@@ -1475,7 +1475,7 @@ export async function executeHTTPTests(
       qaTaskId: '',
       title: 'Run-level infrastructure failure',
       status: 'failed',
-      executor: 'runner',
+      executor: 'uncertain',
       stepResults: [],
       evidence: [
         'Pre-run reachability check failed',

@@ -205,13 +205,9 @@ export function generateRequestBody(
     };
   }
 
-  // Priority 5: Generic fallback with enhanced field generation
-  const endpoint = route?.path || '';
-  const fallbackBody = generateGenericFallback(scenario, testId, timestamp, method, endpoint);
-  
-  // Validate fallback body has reasonable fields
-  const fieldCount = Object.keys(fallbackBody).length;
-  const confidence = fieldCount >= 3 ? 'medium' : 'low';
+  // Priority 5: Generic fallback without invented fields
+  const fallbackBody = generateGenericFallback(scenario, testId, timestamp, method, route?.path || '');
+  const confidence: BodyGenerationResult['confidence'] = 'low';
   
   return {
     body: fallbackBody,
@@ -533,7 +529,6 @@ function generateFieldValue(
   if (type === 'array') {
     const itemSchema = fieldSchema.items || {};
     const minItems = fieldSchema.minItems || 1;
-    const maxItems = fieldSchema.maxItems || minItems;
     const itemCount = Math.min(minItems, 2); // Generate at least minItems, max 2 for brevity
     
     const items = [];
@@ -799,9 +794,9 @@ function generateBodyFromConfig(
 export function inferFieldsFromContext(
   task: QATask,
   acceptanceCriterion: AcceptanceCriterion,
-  route: DiscoveredRoute | null,
+  _route: DiscoveredRoute | null,
   testId: string,
-  timestamp: string
+  _timestamp: string
 ): Record<string, any> {
   const inferredFields: Record<string, any> = {};
 
@@ -962,24 +957,14 @@ export function generateStatefulBody(
  * - Common field patterns
  */
 function generateGenericFallback(
-  scenario: BodyScenario,
-  testId: string,
-  timestamp: string,
-  method?: string,
-  endpoint?: string
+  _scenario: BodyScenario,
+  _testId: string,
+  _timestamp: string,
+  _method?: string,
+  _endpoint?: string
 ): Record<string, any> {
-  // Minimal, neutral fallback body that avoids application-specific terminology
-  const body: Record<string, any> = {};
-
-  // Provide commonly useful fields without assuming domain-specific meanings
-  body.name = `${testId}`;
-  body.description = `generated-${testId}`;
-  body.value = scenario === 'valid' ? 1 : 0;
-  body.status = scenario === 'valid' ? 'active' : 'invalid';
-  body.createdAt = new Date(parseInt(timestamp)).toISOString();
-  body.data = `generated-${testId}`;
-
-  return body;
+  // Conservative fallback: do not invent fields without schema/source evidence
+  return {};
 }
 /**
  * Validate generated body against OpenAPI schema

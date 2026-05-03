@@ -9,6 +9,7 @@
   "type": "module",
   "scripts": {
     "build": "tsup",
+    "test": "npm run typecheck",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",

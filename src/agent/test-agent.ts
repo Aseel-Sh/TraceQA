@@ -9,7 +9,8 @@ import {
   SYSTEM_PROMPT,
   getTestPlanningPrompt,
   getTestExecutionPrompt,
-  getReportGenerationPrompt
+  getReportGenerationPrompt,
+  getCompactSingleTestPrompt
 } from './prompts.js';
 import { parseJSONSafely, safeExtractJSON, ExtractionResult } from '../utils/json-extractor.js';
 import fs from 'fs-extra';
@@ -109,259 +110,18 @@ export class TestAgent {
     this.generationMetrics.totalAttempts++;
     
     try {
-      const prompt = this.buildPrompt(acceptanceCriteria, routes, baseUrl);
-      const response = await this.watsonxClient.sendMessage(prompt);
+      // Generate one test at a time to avoid truncation
+      const allSuggestions: any[] = [];
       
-      // Track response length
-      this.updateAverageResponseLength(response.length);
-      
-      // Log response metadata for debugging
-      logger.debug(`Response length: ${response.length} chars`);
-      logger.debug(`Response preview: ${response.substring(0, 100)}...`);
-      
-      // Use robust JSON extraction
-      const extractionResult: ExtractionResult = safeExtractJSON(response, {
-        saveRawOnFailure: true
-      });
-      
-      if (!extractionResult.success) {
-        this.generationMetrics.failedExtractions++;
-        this.trackErrorType(extractionResult.errorDetails?.type || 'UNKNOWN');
-        
-        logger.warn('Failed to extract JSON from IBM response - attempting compact retry');
-        logger.debug(`Extraction error: ${extractionResult.error}`);
-        if (extractionResult.errorDetails) {
-          logger.debug(`Error details: ${JSON.stringify(extractionResult.errorDetails)}`);
-        }
-        
-        // Save raw output for debugging
-        if (extractionResult.rawText) {
-          await this.saveRawResponse(extractionResult.rawText, 'malformed-json-attempt-1');
-        }
-        
-        // Retry with compact prompt (Issue #9: handle malformed/truncated JSON)
-        try {
-          this.generationMetrics.compactRetriesAttempted++;
-          
-          logger.info('Retrying with compact prompt to avoid truncation...');
-          const compactPrompt = this.buildCompactPrompt(acceptanceCriteria, routes, baseUrl);
-          const compactResponse = await this.watsonxClient.sendMessage(compactPrompt);
-          
-          this.updateAverageResponseLength(compactResponse.length);
-          logger.debug(`Compact response length: ${compactResponse.length} chars`);
-          
-          const compactExtraction: ExtractionResult = safeExtractJSON(compactResponse, {
-            saveRawOnFailure: true
-          });
-          
-          if (compactExtraction.success) {
-            this.generationMetrics.compactRetriesSucceeded++;
-            this.generationMetrics.successfulExtractions++;
-            
-            logger.success('✓ Compact retry succeeded - extracted valid JSON');
-            
-            // Validate the compact response
-            const compactData = compactExtraction.data;
-            const compactSuggestions = Array.isArray(compactData) ? compactData : [compactData];
-            
-            if (this.validateJSONStructure(compactSuggestions)) {
-              // Mark remaining ACs as uncertain since we only got one
-              const remainingACs = acceptanceCriteria.slice(1);
-              for (const ac of remainingACs) {
-                compactSuggestions.push({
-                  acceptanceCriterionId: ac.id,
-                  title: `Test ${ac.id}`,
-                  type: 'uncertain',
-                  priority: 'medium',
-                  executionMode: 'uncertain',
-                  steps: [],
-                  expectedResult: ac.expectedResult || 'Not specified',
-                  reasoning: 'Generated from compact prompt',
-                  uncertainReason: 'Original response was malformed/truncated - generated minimal test'
-                });
-              }
-              
-              return compactSuggestions;
-            }
-          }
-          
-          // Compact retry also failed
-          logger.error('Compact retry failed to extract valid JSON');
-          if (compactExtraction.rawText) {
-            await this.saveRawResponse(compactExtraction.rawText, 'malformed-json-attempt-2');
-          }
-        } catch (retryError) {
-          logger.error('Compact retry threw error:', retryError);
-        }
-        
-        // Both attempts failed - mark all as uncertain
-        this.generationMetrics.uncertainMarked += acceptanceCriteria.length;
-        
-        logger.warn('All JSON extraction attempts failed - marking tests as uncertain');
-        this.logGenerationMetrics();
-        
-        return acceptanceCriteria.map(ac => ({
-          acceptanceCriterionId: ac.id,
-          title: `Test ${ac.id}`,
-          type: 'uncertain',
-          priority: 'medium',
-          executionMode: 'uncertain',
-          steps: [],
-          expectedResult: ac.expectedResult || 'Not specified',
-          reasoning: 'Could not generate from IBM',
-          uncertainReason: 'JSON parsing failed after multiple attempts - response was malformed or truncated'
-        }));
+      for (const ac of acceptanceCriteria) {
+        const singleTestResult = await this.generateSingleTest(ac, routes, baseUrl);
+        allSuggestions.push(singleTestResult);
       }
       
-      // Successful extraction
-      this.generationMetrics.successfulExtractions++;
-      
-      // Validate extracted data
-      const data = extractionResult.data;
-      
-      // Handle both array and object responses
-      let suggestions: any[] = [];
-      
-      if (Array.isArray(data)) {
-        suggestions = data;
-      } else if (data && typeof data === 'object') {
-        // Check for common response structures
-        if (Array.isArray(data.tasks)) {
-          suggestions = data.tasks;
-        } else if (Array.isArray(data.testCases)) {
-          suggestions = data.testCases;
-        } else if (Array.isArray(data.tests)) {
-          suggestions = data.tests;
-        } else {
-          // Single task/test object
-          suggestions = [data];
-        }
-      }
-      
-      // Validate AC alignment for each suggestion (Issue #8)
-      const validatedSuggestions: any[] = [];
-      let hasDrift = false;
-      let driftReasons: string[] = [];
-      
-      for (const suggestion of suggestions) {
-        // Find matching AC
-        const matchingAC = acceptanceCriteria.find(
-          ac => ac.id === suggestion.acceptanceCriterionId || ac.id === suggestion.criterionId
-        );
-        
-        if (!matchingAC) {
-          logger.warn(`No matching AC found for suggestion with ID: ${suggestion.acceptanceCriterionId || suggestion.criterionId}`);
-          hasDrift = true;
-          driftReasons.push(`No matching AC for ${suggestion.acceptanceCriterionId || suggestion.criterionId}`);
-          continue;
-        }
-        
-        // Detect drift
-        const driftCheck = this.detectACDrift(
-          suggestion,
-          matchingAC.id,
-          matchingAC.description || matchingAC.criterion
-        );
-        
-        if (driftCheck.hasDrift) {
-          logger.warn(`AC drift detected for ${matchingAC.id}: ${driftCheck.reason}`);
-          hasDrift = true;
-          driftReasons.push(`${matchingAC.id}: ${driftCheck.reason}`);
-        } else {
-          validatedSuggestions.push(suggestion);
-        }
-      }
-      
-      // If drift detected, retry once with stronger prompt
-      if (hasDrift && validatedSuggestions.length < acceptanceCriteria.length) {
-        this.generationMetrics.retriesAttempted++;
-        
-        logger.warn('AC drift detected, retrying with stronger prompt...');
-        logger.debug(`Drift reasons: ${driftReasons.join('; ')}`);
-        
-        const retryPrompt = this.buildRetryPrompt(
-          acceptanceCriteria,
-          routes,
-          baseUrl,
-          suggestions,
-          driftReasons.join('; ')
-        );
-        
-        const retryResponse = await this.watsonxClient.sendMessage(retryPrompt);
-        const retryExtraction: ExtractionResult = safeExtractJSON(retryResponse, {
-          saveRawOnFailure: true
-        });
-        
-        if (retryExtraction.success) {
-          this.generationMetrics.retriesSucceeded++;
-          
-          let retrySuggestions: any[] = [];
-          const retryData = retryExtraction.data;
-          
-          if (Array.isArray(retryData)) {
-            retrySuggestions = retryData;
-          } else if (retryData && typeof retryData === 'object') {
-            if (Array.isArray(retryData.tasks)) {
-              retrySuggestions = retryData.tasks;
-            } else if (Array.isArray(retryData.testCases)) {
-              retrySuggestions = retryData.testCases;
-            } else if (Array.isArray(retryData.tests)) {
-              retrySuggestions = retryData.tests;
-            } else {
-              retrySuggestions = [retryData];
-            }
-          }
-          
-          // Validate retry suggestions
-          for (const suggestion of retrySuggestions) {
-            const matchingAC = acceptanceCriteria.find(
-              ac => ac.id === suggestion.acceptanceCriterionId || ac.id === suggestion.criterionId
-            );
-            
-            if (matchingAC) {
-              const driftCheck = this.detectACDrift(
-                suggestion,
-                matchingAC.id,
-                matchingAC.description || matchingAC.criterion
-              );
-              
-              if (!driftCheck.hasDrift) {
-                // Replace or add validated suggestion
-                const existingIndex = validatedSuggestions.findIndex(
-                  s => s.acceptanceCriterionId === suggestion.acceptanceCriterionId
-                );
-                if (existingIndex >= 0) {
-                  validatedSuggestions[existingIndex] = suggestion;
-                } else {
-                  validatedSuggestions.push(suggestion);
-                }
-                logger.success(`✓ Retry successful for ${matchingAC.id}`);
-              } else {
-                logger.warn(`Retry still has drift for ${matchingAC.id}: ${driftCheck.reason}`);
-                // Mark as uncertain
-                this.generationMetrics.uncertainMarked++;
-                validatedSuggestions.push({
-                  ...suggestion,
-                  executionMode: 'uncertain',
-                  uncertainReason: `AC drift detected after retry: ${driftCheck.reason}`
-                });
-              }
-            }
-          }
-        } else {
-          logger.warn('Retry failed to extract JSON, using original validated suggestions');
-        }
-      }
-      
-      logger.success(`✓ Extracted ${validatedSuggestions.length} validated QA task suggestions from IBM`);
-      if (hasDrift) {
-        logger.info(`Note: ${driftReasons.length} suggestions had AC drift issues`);
-      }
-      
-      // Log metrics summary
+      logger.success(`✓ Generated ${allSuggestions.length} QA task suggestions from IBM`);
       this.logGenerationMetrics();
       
-      return validatedSuggestions;
+      return allSuggestions;
       
     } catch (error) {
       logger.error('Error generating tests from IBM:', error);
@@ -373,9 +133,274 @@ export class TestAgent {
   }
 
   /**
+   * Generate a single test for one acceptance criterion
+   */
+  private async generateSingleTest(
+    acceptanceCriterion: any,
+    routes: any[],
+    baseUrl: string,
+    retryCount: number = 0
+  ): Promise<any> {
+    try {
+      const prompt = this.buildSingleTestPrompt(acceptanceCriterion, routes, baseUrl, retryCount);
+      const response = await this.watsonxClient.sendMessage(prompt, {
+        maxTokens: retryCount > 0 ? 1024 : 2048 // Reduce tokens on retry
+      });
+      
+      // Track response length
+      this.updateAverageResponseLength(response.text.length);
+      
+      // Log response metadata for debugging
+      logger.debug(`Response length: ${response.text.length} chars, truncated: ${response.truncated}`);
+      
+      // Check for truncation
+      if (response.truncated) {
+        logger.warn(`⚠️ Response truncated for ${acceptanceCriterion.id}`);
+        
+        // Retry with even more compact prompt if first retry
+        if (retryCount === 0) {
+          this.generationMetrics.compactRetriesAttempted++;
+          logger.info('Retrying with ultra-compact prompt...');
+          return await this.generateSingleTest(acceptanceCriterion, routes, baseUrl, retryCount + 1);
+        }
+        
+        // Mark as uncertain if still truncated after retry
+        this.generationMetrics.uncertainMarked++;
+        return {
+          acceptanceCriterionId: acceptanceCriterion.id,
+          title: `Test ${acceptanceCriterion.id}`,
+          type: 'uncertain',
+          priority: 'medium',
+          executionMode: 'uncertain',
+          steps: [],
+          expectedResult: acceptanceCriterion.expectedResult || 'Not specified',
+          uncertainReason: 'Response truncated after retries - unable to generate complete test'
+        };
+      }
+      
+      // Use robust JSON extraction
+      const extractionResult: ExtractionResult = safeExtractJSON(response.text, {
+        saveRawOnFailure: true
+      });
+      
+      if (!extractionResult.success) {
+        this.generationMetrics.failedExtractions++;
+        this.trackErrorType(extractionResult.errorDetails?.type || 'UNKNOWN');
+        
+        logger.warn(`Failed to extract JSON for ${acceptanceCriterion.id}`);
+        
+        // Save raw output for debugging
+        if (extractionResult.rawText) {
+          await this.saveRawResponse(extractionResult.rawText, `malformed-${acceptanceCriterion.id}`);
+        }
+        
+        // Mark as uncertain
+        this.generationMetrics.uncertainMarked++;
+        return {
+          acceptanceCriterionId: acceptanceCriterion.id,
+          title: `Test ${acceptanceCriterion.id}`,
+          type: 'uncertain',
+          priority: 'medium',
+          executionMode: 'uncertain',
+          steps: [],
+          expectedResult: acceptanceCriterion.expectedResult || 'Not specified',
+          uncertainReason: 'JSON parsing failed - response was malformed'
+        };
+      }
+      
+      // Successful extraction
+      this.generationMetrics.successfulExtractions++;
+      
+      // Extract the test data
+      const data = extractionResult.data;
+      let suggestion: any;
+      
+      if (Array.isArray(data)) {
+        suggestion = data[0]; // Take first element
+      } else if (data && typeof data === 'object') {
+        suggestion = data;
+      } else {
+        throw new Error('Invalid response format');
+      }
+      
+      // Normalize IBM output
+      const normalized = this.normalizeIBMOutput([suggestion])[0];
+      
+      // Validate AC alignment
+      const driftCheck = this.detectACDrift(
+        normalized,
+        acceptanceCriterion.id,
+        acceptanceCriterion.description || acceptanceCriterion.criterion
+      );
+      
+      if (driftCheck.hasDrift) {
+        logger.warn(`AC drift detected for ${acceptanceCriterion.id}: ${driftCheck.reason}`);
+        normalized.executionMode = 'uncertain';
+        normalized.uncertainReason = `AC drift: ${driftCheck.reason}`;
+      }
+      
+      return normalized;
+      
+    } catch (error) {
+      logger.error(`Error generating test for ${acceptanceCriterion.id}:`, error);
+      
+      // Return uncertain test
+      this.generationMetrics.uncertainMarked++;
+      return {
+        acceptanceCriterionId: acceptanceCriterion.id,
+        title: `Test ${acceptanceCriterion.id}`,
+        type: 'uncertain',
+        priority: 'medium',
+        executionMode: 'uncertain',
+        steps: [],
+        expectedResult: acceptanceCriterion.expectedResult || 'Not specified',
+        uncertainReason: 'Error during generation'
+      };
+    }
+  }
+
+  /**
+   * Normalize IBM watsonx.ai output (Gap 1: treat IBM output as draft)
+   * Proactively clean up common issues before downstream processing
+   */
+  private normalizeIBMOutput(suggestions: any[]): any[] {
+    return suggestions.map(suggestion => {
+      // Enforce compact deterministic schema and remove long reasoning
+      const compact: any = {};
+
+      compact.id = suggestion.id || suggestion.acceptanceCriterionId || `gen-${Date.now()}`;
+      compact.acceptanceCriterionId = suggestion.acceptanceCriterionId || suggestion.id || null;
+
+      const status = (suggestion.status || '').toString().toLowerCase();
+      compact.status = status === 'ready' || status === 'manual' ? status : (status === 'uncertain' ? 'uncertain' : 'uncertain');
+
+      // Shorten uncertainReason to one sentence and max 200 chars
+      if (suggestion.uncertainReason && typeof suggestion.uncertainReason === 'string') {
+        const oneSentence = suggestion.uncertainReason.split(/\.|\n/)[0].trim();
+        compact.uncertainReason = oneSentence.substring(0, 200);
+      } else if (suggestion.status && compact.status === 'uncertain') {
+        compact.uncertainReason = 'Model returned uncertain result';
+      } else {
+        compact.uncertainReason = '';
+      }
+
+      // Normalize steps: keep minimal fields
+      const steps = Array.isArray(suggestion.steps) ? suggestion.steps : [];
+      compact.steps = steps.map((s: any) => {
+        if (typeof s === 'string') {
+          // Try to extract method and path from string
+          const m = s.match(/^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+([^\s]+)/i);
+          if (m) {
+            return { method: m[1].toUpperCase(), path: m[2], url: '' , headers: {}, body: null, expectedStatus: 200 };
+          }
+          return { method: 'GET', path: s, url: '', headers: {}, body: null, expectedStatus: 200 };
+        }
+
+        return {
+          method: (s.method || s.verb || 'GET').toUpperCase(),
+          path: s.path || s.url || s.endpoint || '',
+          url: s.url || '',
+          headers: s.headers || {},
+          body: s.body || null,
+          expectedStatus: s.expectedStatus || s.status || 200,
+        };
+      });
+
+      // Log if we changed shape
+      if (JSON.stringify(compact) !== JSON.stringify(suggestion)) {
+        logger.debug('Normalized IBM suggestion to compact schema', { original: suggestion, compact });
+      }
+
+      return compact;
+      
+    });
+  }
+
+  /**
+   * Normalize step IDs by removing guessed patterns
+   * Patterns like /users/1, /items/999, /products/123 → /users/{id}, /items/{id}, /products/{id}
+   */
+  public normalizeStepIDs(step: string): string {
+    // Remove guessed numeric IDs like /1, /123, /999
+    // Pattern: /resource/single-digit or /resource/999 or /resource/123
+    const guessedIDPatterns = [
+      { pattern: /\/(\w+)\/\d{1}(?=\s|$|\/|\?)/g, replacement: '/$1/{id}' },  // /users/1
+      { pattern: /\/(\w+)\/999(?=\s|$|\/|\?)/g, replacement: '/$1/{id}' },    // /items/999
+      { pattern: /\/(\w+)\/123(?=\s|$|\/|\?)/g, replacement: '/$1/{id}' },    // /products/123
+    ];
+    
+    let normalized = step;
+    let wasModified = false;
+    
+    for (const { pattern, replacement } of guessedIDPatterns) {
+      const before = normalized;
+      normalized = normalized.replace(pattern, replacement);
+      if (normalized !== before) {
+        wasModified = true;
+      }
+    }
+    
+    if (wasModified) {
+      logger.debug('Normalized step IDs', {
+        original: step,
+        normalized
+      });
+    }
+    
+    return normalized;
+  }
+
+  /**
+   * Remove unjustified exact body assertions
+   * Only remove if not explicitly justified with words like "exact" or "specific"
+   */
+  public removeExactBodyAssertions(expectedResult: string): string {
+    // Check if exact match is explicitly justified
+    const lowerResult = expectedResult.toLowerCase();
+    const hasJustification =
+      lowerResult.includes('exact') ||
+      lowerResult.includes('specific') ||
+      lowerResult.includes('precisely') ||
+      lowerResult.includes('must match');
+    
+    // If justified, don't modify
+    if (hasJustification) {
+      return expectedResult;
+    }
+    
+    // Remove exact body match requirements
+    const exactMatchPatterns = [
+      { pattern: /body\s+(?:must\s+)?equals?\s+"[^"]+"/gi, replacement: 'appropriate response body' },
+      { pattern: /exact(?:ly)?\s+match(?:es)?\s+"[^"]+"/gi, replacement: 'appropriate response' },
+      { pattern: /response\s+(?:must\s+)?be\s+"[^"]+"/gi, replacement: 'appropriate response' },
+      { pattern: /body\s+(?:must\s+)?be\s+"[^"]+"/gi, replacement: 'appropriate response body' },
+    ];
+    
+    let normalized = expectedResult;
+    let wasModified = false;
+    
+    for (const { pattern, replacement } of exactMatchPatterns) {
+      const before = normalized;
+      normalized = normalized.replace(pattern, replacement);
+      if (normalized !== before) {
+        wasModified = true;
+      }
+    }
+    
+    if (wasModified) {
+      logger.debug('Removed unjustified exact body assertions', {
+        original: expectedResult,
+        normalized
+      });
+    }
+    
+    return normalized;
+  }
+
+  /**
    * Build prompt for QA task suggestions with strong AC enforcement
    */
-  private buildPrompt(
+  public buildPrompt(
     acceptanceCriteria: any[],
     routes: any[],
     baseUrl: string
@@ -528,15 +553,28 @@ IMPORTANT: Respond with ONLY the JSON array. No explanations, no markdown, no ex
 
     return { hasDrift: false };
   }
+  /**
+   * Build ultra-compact prompt for single test generation
+   */
+  private buildSingleTestPrompt(
+    acceptanceCriterion: any,
+    routes: any[],
+    baseUrl: string,
+    retryCount: number
+  ): string {
+    // Use the compact prompt function from prompts.ts
+    return getCompactSingleTestPrompt(acceptanceCriterion, routes, baseUrl, retryCount);
+  }
+
 
   /**
    * Build retry prompt with stronger AC enforcement
    */
-  private buildRetryPrompt(
+  public buildRetryPrompt(
     acceptanceCriteria: any[],
     routes: any[],
     baseUrl: string,
-    previousAttempt: any,
+    _previousAttempt: any,
     driftReason: string
   ): string {
     const prompt = `RETRY: Previous response drifted from acceptance criteria.
@@ -579,7 +617,7 @@ RESPONSE FORMAT: Return ONLY valid JSON array. No markdown, no explanations, no 
   /**
    * Build a compact prompt for JSON parsing retry (when first response was malformed)
    */
-  private buildCompactPrompt(
+  public buildCompactPrompt(
     acceptanceCriteria: any[],
     routes: any[],
     baseUrl: string
@@ -643,7 +681,7 @@ Example: [{"acceptanceCriterionId":"${firstAC.id}","title":"Test ${firstAC.id}",
   /**
    * Validate JSON structure has required fields
    */
-  private validateJSONStructure(suggestions: any[]): boolean {
+  public validateJSONStructure(suggestions: any[]): boolean {
     if (!Array.isArray(suggestions) || suggestions.length === 0) {
       logger.debug('JSON validation failed: not an array or empty');
       return false;
@@ -698,7 +736,7 @@ Example: [{"acceptanceCriterionId":"${firstAC.id}","title":"Test ${firstAC.id}",
       const response = await this.watsonxClient.sendMessage(prompt);
 
       // Parse test plan from response with repair
-      const parsedPlan = await this.parseTestPlanWithRepair(response);
+      const parsedPlan = await this.parseTestPlanWithRepair(response.text);
 
       if (!parsedPlan || !parsedPlan.testCases) {
         throw new TraceQAError(
@@ -799,7 +837,7 @@ Return valid JSON only:`;
         temperature: 0.1,
       });
 
-      return this.parseTestPlanWithRepair(repairedResponse, 2);
+      return this.parseTestPlanWithRepair(repairedResponse.text, 2);
     }
 
     throw new TraceQAError(
@@ -997,7 +1035,7 @@ Return valid JSON only:`;
         duration,
         message: passed ? 'Test passed successfully' : 'Test failed',
         timestamp: new Date().toISOString(),
-        logs: [response]
+        logs: [response.text]
       };
     } catch (error) {
       const duration = Date.now() - startTime;
@@ -1102,7 +1140,7 @@ Duration: ${results.duration}ms
       this.updateTokenUsage();
 
       logger.success('Test report generated');
-      return report;
+      return report.text;
     } catch (error) {
       logger.error('Failed to generate report:', error);
       throw new TraceQAError(

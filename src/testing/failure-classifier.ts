@@ -8,8 +8,7 @@ import {
   TestFailureClassification,
   ClassificationResult,
   APITestResult,
-  APIResponse,
-  HTTPMethod
+  APIResponse
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -106,6 +105,8 @@ export function detectGenerationIssue(
 
   // Check response for validation error indicators
   if (response && (response.status === 400 || response.status === 422)) {
+    const hasEmptyRequestBody = requestBody === null || requestBody === undefined || (typeof requestBody === 'object' && !Array.isArray(requestBody) && Object.keys(requestBody).length === 0);
+
     const responseText = JSON.stringify(response.body || response.statusText || '').toLowerCase();
     
     // Check for validation error patterns
@@ -126,6 +127,11 @@ export function detectGenerationIssue(
         evidence.push(bodyStr.substring(0, 500)); // First 500 chars
       }
       
+      return { isGenerationIssue: true, evidence };
+    }
+
+    if (hasEmptyRequestBody) {
+      evidence.push('Request body was missing or empty when client error was returned');
       return { isGenerationIssue: true, evidence };
     }
   }

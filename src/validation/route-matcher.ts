@@ -412,46 +412,6 @@ function normalizePathForComparison(path: string): string {
 }
 
 /**
- * Calculate path similarity score considering parameter patterns
- */
-function calculatePathSimilarity(path1: string, path2: string): number {
-  const segments1 = path1.toLowerCase().split('/').filter(s => s.length > 0);
-  const segments2 = path2.toLowerCase().split('/').filter(s => s.length > 0);
-  
-  if (segments1.length !== segments2.length) {
-    return 0;
-  }
-  
-  let matches = 0;
-  for (let i = 0; i < segments1.length; i++) {
-    const seg1 = segments1[i];
-    const seg2 = segments2[i];
-    
-    // Exact match
-    if (seg1 === seg2) {
-      matches++;
-    }
-    // Both are parameters
-    else if (isPathParameter(seg1) && isPathParameter(seg2)) {
-      matches += 0.8; // Partial credit for parameter match
-    }
-    // One is parameter, check if other could be a value
-    else if (isPathParameter(seg1) || isPathParameter(seg2)) {
-      matches += 0.5; // Some credit for potential parameter match
-    }
-  }
-  
-  return matches / segments1.length;
-}
-
-/**
- * Check if a path segment is a parameter
- */
-function isPathParameter(segment: string): boolean {
-  return /^\{[^}]+\}$|^:[a-zA-Z_][a-zA-Z0-9_]*$|^\[[^\]]+\]$/.test(segment);
-}
-
-/**
  * Infer HTTP method from action type
  */
 function inferMethodFromAction(action: ResourceAction['action']): string | null {
@@ -530,8 +490,7 @@ export function matchRouteToTask(
 
     return pathTokens.every(token => keywords.includes(token) || keywords.some(keyword => keyword.includes(token) || token.includes(keyword)));
   });
-
-  if (directMatch && expectedMethod) {
+  if (directMatch) {
     return {
       matched: true,
       confidence: 'high',
@@ -593,6 +552,11 @@ export function matchRouteToTask(
                           combinedText.toLowerCase().includes('particular');
     if (hasParams !== expectsParams) {
       score -= 5;
+    }
+
+    // Prefer exact (non-parameterized) discovered routes slightly to avoid marking them weak
+    if (!hasParams) {
+      score += 10;
     }
     
     return {
