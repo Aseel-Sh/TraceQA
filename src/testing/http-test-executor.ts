@@ -151,15 +151,17 @@ function assertStatus(
 }
 
 /**
- * Assert response body contains expected patterns
- * 
+ * Assert response body contains expected patterns (advisory by default)
+ *
  * @param responseBody - Response body (any type)
  * @param expectedPatterns - Array of patterns that should exist in response
+ * @param isCritical - Whether this assertion is critical (default: false for advisory)
  * @returns Assertion result with matched/missed patterns
  */
 function assertBodyContains(
   responseBody: any,
-  expectedPatterns: string[]
+  expectedPatterns: string[],
+  isCritical: boolean = false
 ): BodyAssertionResult {
   // Convert response body to string for pattern matching
   let bodyString: string;
@@ -188,15 +190,85 @@ function assertBodyContains(
   }
 
   const passed = missedPatterns.length === 0;
+  const prefix = isCritical ? '' : '[ADVISORY] ';
   const message = passed
-    ? `All ${matchedPatterns.length} expected patterns found in response body`
-    : `Missing ${missedPatterns.length} of ${expectedPatterns.length} expected patterns: ${missedPatterns.join(', ')}`;
+    ? `${prefix}All ${matchedPatterns.length} expected patterns found in response body`
+    : `${prefix}Missing ${missedPatterns.length} of ${expectedPatterns.length} expected patterns: ${missedPatterns.join(', ')}`;
 
   return {
     passed,
     message,
     matchedPatterns,
     missedPatterns,
+  };
+}
+
+/**
+ * Validate response body against schema (structure validation, not exact values)
+ *
+ * @param responseBody - Response body to validate
+ * @param schema - Expected schema (OpenAPI response schema)
+ * @returns Validation result with errors if any
+ */
+function validateBodySchema(
+  responseBody: any,
+  schema: any
+): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  
+  if (!schema) {
+    return { valid: true, errors: [] };
+  }
+
+  // Handle OpenAPI response schema format (e.g., { "200": { "content": { "application/json": { "schema": {...} } } } })
+  let actualSchema = schema;
+  if (typeof schema === 'object' && !Array.isArray(schema)) {
+    // Extract schema from OpenAPI response format
+    const statusKeys = Object.keys(schema).filter(k => /^\d{3}$/.test(k));
+    if (statusKeys.length > 0) {
+      const firstStatus = schema[statusKeys[0]];
+      if (firstStatus?.content?.['application/json']?.schema) {
+        actualSchema = firstStatus.content['application/json'].schema;
+      } else if (firstStatus?.schema) {
+        actualSchema = firstStatus.schema;
+      }
+    }
+  }
+
+  // Validate required fields
+  if (actualSchema.required && Array.isArray(actualSchema.required)) {
+    for (const field of actualSchema.required) {
+      if (responseBody === null || responseBody === undefined || !(field in responseBody)) {
+        errors.push(`Missing required field: ${field}`);
+      }
+    }
+  }
+
+  // Validate field types (structure, not exact values)
+  if (actualSchema.properties && typeof responseBody === 'object' && responseBody !== null) {
+    for (const [fieldName, fieldSchema] of Object.entries(actualSchema.properties)) {
+      if (fieldName in responseBody) {
+        const fieldValue = responseBody[fieldName];
+        const expectedType = (fieldSchema as any).type;
+        
+        if (expectedType) {
+          const actualType = Array.isArray(fieldValue) ? 'array' : typeof fieldValue;
+          const typeMatches =
+            (expectedType === 'integer' && typeof fieldValue === 'number') ||
+            (expectedType === 'number' && typeof fieldValue === 'number') ||
+            (expectedType === actualType);
+          
+          if (!typeMatches && fieldValue !== null) {
+            errors.push(`Field '${fieldName}' has wrong type: expected ${expectedType}, got ${actualType}`);
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
   };
 }
 
@@ -258,6 +330,26 @@ function extractValueByPath(data: any, path: string): any {
  * @param captureConfig - Variable extraction configuration
  * @returns Captured variables as key-value pairs
  */
+/**
+ * Extract ID from Location header URL (Issue #7)
+ * Handles formats like: /api/users/123, /users/abc-def-123, https://api.com/items/456
+ */
+function extractIdFromLocation(locationUrl: string): string | undefined {
+  if (!locationUrl) return undefined;
+  
+  // Remove query string and hash
+  const cleanUrl = locationUrl.split('?')[0].split('#')[0];
+  
+  // Extract last path segment
+  const segments = cleanUrl.split('/').filter(s => s.length > 0);
+  if (segments.length === 0) return undefined;
+  
+  const lastSegment = segments[segments.length - 1];
+  
+  // Return the last segment as the ID
+  return lastSegment;
+}
+
 function captureVariables(
   response: Response,
   responseBody: any,
@@ -276,6 +368,15 @@ function captureVariables(
         // Extract from headers - path is the header name
         const headerName = config.path.replace(/^\$\.?/, '');
         value = response.headers.get(headerName);
+        
+        // Special handling for Location header - extract ID from URL (Issue #7)
+        if (headerName.toLowerCase() === 'location' && typeof value === 'string') {
+          const extractedId = extractIdFromLocation(value);
+          if (extractedId) {
+            value = extractedId;
+            logger.debug(`Extracted ID '${extractedId}' from Location header`);
+          }
+        }
       } else if (source === 'status') {
         value = response.status;
       }
@@ -496,31 +597,54 @@ async function executeWithRetry(
       }
     }
 
-    // Assert status
+    // Assert status (always critical)
     const statusAssertion = assertStatus(
       response.status,
       step.expectedStatus,
       step.acceptableStatuses
     );
 
-    // Assert body contains (if specified)
+    // Assert body contains (advisory by default unless explicitly marked critical)
     let bodyAssertion: BodyAssertionResult | null = null;
+    const advisoryWarnings: string[] = [];
+    const isCritical = step.bodyAssertionsCritical ?? false;
+    
     if (step.expectedBodyContains && step.expectedBodyContains.length > 0) {
-      bodyAssertion = assertBodyContains(responseBody, step.expectedBodyContains);
+      bodyAssertion = assertBodyContains(responseBody, step.expectedBodyContains, isCritical);
+      
+      // If body assertion failed but is advisory, add to warnings instead of failing test
+      if (!bodyAssertion.passed && !isCritical) {
+        advisoryWarnings.push(bodyAssertion.message);
+        logger.info(`Advisory body assertion warning: ${bodyAssertion.message}`);
+      }
     }
 
-    // Determine if step passed
-    const passed = statusAssertion.passed && (bodyAssertion ? bodyAssertion.passed : true);
+    // Validate response schema if provided (critical validation)
+    let schemaValidation: { valid: boolean; errors: string[] } | null = null;
+    if (step.expectedBodySchema) {
+      schemaValidation = validateBodySchema(responseBody, step.expectedBodySchema);
+      if (!schemaValidation.valid) {
+        logger.warn(`Schema validation failed: ${schemaValidation.errors.join(', ')}`);
+      }
+    }
 
-    // Build error message if failed
+    // Determine if step passed (only fail on critical assertions and schema validation)
+    const passed = statusAssertion.passed &&
+                   (bodyAssertion && isCritical ? bodyAssertion.passed : true) &&
+                   (schemaValidation ? schemaValidation.valid : true);
+
+    // Build error message if failed (only include critical failures)
     let errorMessage: string | null = null;
     if (!passed) {
       const errors: string[] = [];
       if (!statusAssertion.passed) {
         errors.push(statusAssertion.message);
       }
-      if (bodyAssertion && !bodyAssertion.passed) {
+      if (bodyAssertion && !bodyAssertion.passed && isCritical) {
         errors.push(bodyAssertion.message);
+      }
+      if (schemaValidation && !schemaValidation.valid) {
+        errors.push(`Schema validation failed: ${schemaValidation.errors.join(', ')}`);
       }
       errorMessage = errors.join('; ');
     }
@@ -550,6 +674,7 @@ async function executeWithRetry(
       passed,
       duration,
       error: errorMessage,
+      advisoryWarnings: advisoryWarnings.length > 0 ? advisoryWarnings : undefined,
       capturedVariables,
       responseHeaders,
     };

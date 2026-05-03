@@ -14,6 +14,14 @@ import {
 import { logger } from '../utils/logger.js';
 
 /**
+ * Schema validation result interface
+ */
+export interface SchemaValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+
+/**
  * Network error codes that indicate infrastructure failures
  */
 const NETWORK_ERROR_CODES = [
@@ -39,7 +47,95 @@ const APPLICATION_ERROR_STATUSES = [500, 501, 502, 503, 504, 505, 506, 507, 508,
 const EXPECTED_ERROR_STATUSES = [400, 401, 403, 404, 405, 406, 409, 410, 422, 429];
 
 /**
+ * Validation error patterns that indicate bad generated data
+ * These patterns are commonly found in API validation error responses
+ */
+const VALIDATION_ERROR_PATTERNS = [
+  'required field',
+  'missing required',
+  'invalid enum',
+  'must be one of',
+  'validation error',
+  'validation failed',
+  'invalid value for',
+  'field is required',
+  'not a valid',
+  'does not match pattern',
+  'is required',
+  'not allowed',
+  'invalid type',
+  'expected type',
+  'must match',
+  'should be',
+  'cannot be empty',
+  'must not be empty',
+  'invalid format',
+  'bad request'
+];
+
+/**
+ * Detect if a test failure is due to TraceQA generation issues
+ * Checks schema validation results and response validation error patterns
+ *
+ * Integration with schema validation:
+ * - Import validateBodyAgainstSchema from '../validation/body-generator.js'
+ * - Before making request, validate the generated body:
+ *   const schemaValidation = validateBodyAgainstSchema(requestBody, route.requestSchema, openApiSpec);
+ * - Pass schemaValidation to classifyTestResult in the context parameter
+ *
+ * @param response - API response to check for validation errors
+ * @param schemaValidation - Optional schema validation result from body-generator
+ * @param requestBody - Optional request body that was sent
+ * @returns Object with isGenerationIssue flag and evidence array
+ */
+export function detectGenerationIssue(
+  response?: APIResponse,
+  schemaValidation?: SchemaValidationResult,
+  requestBody?: unknown
+): { isGenerationIssue: boolean; evidence: string[] } {
+  const evidence: string[] = [];
+
+  // Check if schema validation failed before execution
+  if (schemaValidation && !schemaValidation.valid) {
+    evidence.push('Schema validation failed before request execution');
+    schemaValidation.errors.forEach(error => {
+      evidence.push(`  - ${error}`);
+    });
+    return { isGenerationIssue: true, evidence };
+  }
+
+  // Check response for validation error indicators
+  if (response && (response.status === 400 || response.status === 422)) {
+    const responseText = JSON.stringify(response.body || response.statusText || '').toLowerCase();
+    
+    // Check for validation error patterns
+    const foundPatterns: string[] = [];
+    for (const pattern of VALIDATION_ERROR_PATTERNS) {
+      if (responseText.includes(pattern)) {
+        foundPatterns.push(pattern);
+      }
+    }
+
+    if (foundPatterns.length > 0) {
+      evidence.push(`Response contains validation error patterns: ${foundPatterns.join(', ')}`);
+      
+      // Extract specific validation messages from response body
+      if (response.body && typeof response.body === 'object') {
+        const bodyStr = JSON.stringify(response.body, null, 2);
+        evidence.push('Response body validation errors:');
+        evidence.push(bodyStr.substring(0, 500)); // First 500 chars
+      }
+      
+      return { isGenerationIssue: true, evidence };
+    }
+  }
+
+  return { isGenerationIssue: false, evidence: [] };
+}
+
+/**
  * Classify a test result based on error, response, and context
+ * Enhanced to detect TraceQA generation issues using schema validation
  */
 export function classifyTestResult(
   testResult: APITestResult,
@@ -47,9 +143,11 @@ export function classifyTestResult(
     isNegativeTest?: boolean;
     expectedStatuses?: number[];
     testDescription?: string;
+    schemaValidation?: SchemaValidationResult;
+    discoveredRoutes?: Array<{ method: string; path: string }>;
   }
 ): ClassificationResult {
-  const { error, response, passed, assertions } = testResult;
+  const { error, response, passed, assertions, request } = testResult;
 
   // If test passed, return PASSED classification
   if (passed) {
@@ -92,6 +190,25 @@ export function classifyTestResult(
     };
   }
 
+  // Check for generation issues using schema validation and response patterns
+  const generationCheck = detectGenerationIssue(
+    response,
+    context?.schemaValidation,
+    request?.body
+  );
+
+  if (generationCheck.isGenerationIssue) {
+    return {
+      classification: TestFailureClassification.TRACEQA_GENERATION_ISSUE,
+      reason: 'Test failed due to invalid generated data - validation errors detected',
+      confidence: 0.95,
+      metadata: {
+        errorType: 'validation',
+        evidence: generationCheck.evidence
+      }
+    };
+  }
+
   // If we have a response, classify based on status code
   if (response) {
     return classifyByResponse(response, context);
@@ -128,6 +245,7 @@ export function classifyTestResult(
 
 /**
  * Classify based on HTTP response
+ * Enhanced with better generation issue detection
  */
 function classifyByResponse(
   response: APIResponse,
@@ -135,6 +253,8 @@ function classifyByResponse(
     isNegativeTest?: boolean;
     expectedStatuses?: number[];
     testDescription?: string;
+    schemaValidation?: SchemaValidationResult;
+    discoveredRoutes?: Array<{ method: string; path: string }>;
   }
 ): ClassificationResult {
   const { status } = response;
@@ -173,20 +293,23 @@ function classifyByResponse(
 
   // 4xx errors - could be expected or unexpected
   if (status >= 400 && status < 500) {
-    // If 422 and response contains enum/validation hints, mark as generation issue
-    try {
-      const bodyStr = typeof (response as any).body === 'string' ? (response as any).body : JSON.stringify((response as any).body || {});
-      if (status === 422 && /one of|enum|allowed values|allowed:/i.test(bodyStr)) {
+    // Check for validation errors that indicate generation issues (400/422)
+    if (status === 400 || status === 422) {
+      const generationCheck = detectGenerationIssue(response, context?.schemaValidation);
+      
+      if (generationCheck.isGenerationIssue) {
         return {
           classification: TestFailureClassification.TRACEQA_GENERATION_ISSUE,
-          reason: 'Validation failure (422) indicates generated request did not match expected schema or enum values',
-          confidence: 0.9,
-          metadata: { statusCode: status }
+          reason: `Validation failure (${status}) indicates generated request data is invalid`,
+          confidence: 0.95,
+          metadata: {
+            statusCode: status,
+            evidence: generationCheck.evidence
+          }
         };
       }
-    } catch (e) {
-      // ignore parse errors
     }
+
     // Check if this is an expected error for a negative test
     if (isNegativeTest || EXPECTED_ERROR_STATUSES.includes(status)) {
       // If we expected this status, it might be a pass
@@ -210,17 +333,25 @@ function classifyByResponse(
       }
     }
 
-    // 404 might indicate route matching issue
+    // 404 might indicate route matching issue - check against discovered routes
     if (status === 404) {
+      // If we have discovered routes, check if this is likely a route mismatch
+      const confidence = context?.discoveredRoutes && context.discoveredRoutes.length > 0 ? 0.85 : 0.7;
+      
       return {
         classification: TestFailureClassification.TRACEQA_GENERATION_ISSUE,
         reason: 'Received 404 Not Found - route matching may have failed or URL is incorrect',
-        confidence: 0.7,
-        metadata: { statusCode: 404, possibleCause: 'route_mismatch' }
+        confidence,
+        metadata: {
+          statusCode: 404,
+          possibleCause: 'route_mismatch',
+          hasDiscoveredRoutes: !!context?.discoveredRoutes
+        }
       };
     }
 
-    // Other 4xx errors could be application or generation issues
+    // For other 4xx errors, be conservative - classify as UNCERTAIN unless we have clear evidence
+    // This prevents false positives where valid application validation is misclassified
     return {
       classification: TestFailureClassification.UNCERTAIN,
       reason: `Received ${status} client error - could be application validation or test data issue`,

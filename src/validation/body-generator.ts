@@ -989,6 +989,15 @@ function generateGenericFallback(
  * @param openApiSpec - Full OpenAPI spec for reference resolution
  * @returns Validation result with errors
  */
+/**
+ * Validate a request body against an OpenAPI schema
+ * Enhanced with comprehensive validation including enums, formats, nested objects, and arrays
+ *
+ * @param body - Request body to validate
+ * @param schema - OpenAPI schema to validate against
+ * @param openApiSpec - Full OpenAPI spec for resolving $refs
+ * @returns Validation result with detailed errors
+ */
 export function validateBodyAgainstSchema(
   body: Record<string, any> | null,
   schema: any,
@@ -1003,6 +1012,38 @@ export function validateBodyAgainstSchema(
   // Resolve $ref if present
   if (schema.$ref) {
     schema = resolveRef(schema.$ref, openApiSpec);
+  }
+  
+  // Handle schema compositions (allOf, oneOf, anyOf)
+  if (schema.allOf) {
+    // Validate against all schemas in allOf
+    for (const subSchema of schema.allOf) {
+      const subValidation = validateBodyAgainstSchema(body, subSchema, openApiSpec);
+      errors.push(...subValidation.errors);
+    }
+    return { valid: errors.length === 0, errors };
+  }
+  
+  if (schema.oneOf || schema.anyOf) {
+    // For oneOf/anyOf, body should match at least one schema
+    const schemas = schema.oneOf || schema.anyOf;
+    let matched = false;
+    const allErrors: string[] = [];
+    
+    for (const subSchema of schemas) {
+      const subValidation = validateBodyAgainstSchema(body, subSchema, openApiSpec);
+      if (subValidation.valid) {
+        matched = true;
+        break;
+      }
+      allErrors.push(...subValidation.errors);
+    }
+    
+    if (!matched) {
+      errors.push(`Body does not match any schema in ${schema.oneOf ? 'oneOf' : 'anyOf'}`);
+      errors.push(...allErrors);
+    }
+    return { valid: errors.length === 0, errors };
   }
   
   // Check required fields
@@ -1037,6 +1078,16 @@ export function validateBodyAgainstSchema(
 /**
  * Validate a single field value against its schema
  */
+/**
+ * Validate a field value against its schema
+ * Enhanced with enum validation, format validation, and nested object/array support
+ *
+ * @param fieldName - Name of the field being validated
+ * @param value - Value to validate
+ * @param fieldSchema - Schema for this field
+ * @param openApiSpec - Full OpenAPI spec for resolving $refs
+ * @returns Array of validation error messages
+ */
 function validateFieldValue(
   fieldName: string,
   value: any,
@@ -1053,13 +1104,21 @@ function validateFieldValue(
   const type = fieldSchema.type;
   const actualType = Array.isArray(value) ? 'array' : typeof value;
   
+  // Check enum first (before type check, as enum can constrain any type)
+  if (fieldSchema.enum && Array.isArray(fieldSchema.enum)) {
+    if (!fieldSchema.enum.includes(value)) {
+      errors.push(`Field '${fieldName}' must be one of: ${fieldSchema.enum.join(', ')} (got: ${JSON.stringify(value)})`);
+      return errors; // If enum fails, other validations are less relevant
+    }
+  }
+  
   // Type check
   if (type && actualType !== type && !(type === 'integer' && actualType === 'number')) {
     errors.push(`Field '${fieldName}' has wrong type: expected ${type}, got ${actualType}`);
     return errors; // Don't check further constraints if type is wrong
   }
   
-  // String constraints
+  // String constraints and format validation
   if (type === 'string' && typeof value === 'string') {
     if (fieldSchema.minLength && value.length < fieldSchema.minLength) {
       errors.push(`Field '${fieldName}' is too short: ${value.length} < ${fieldSchema.minLength}`);
@@ -1077,13 +1136,21 @@ function validateFieldValue(
         // Invalid regex in schema - skip validation
       }
     }
-    if (fieldSchema.enum && !fieldSchema.enum.includes(value)) {
-      errors.push(`Field '${fieldName}' must be one of: ${fieldSchema.enum.join(', ')}`);
+    
+    // Format validation (email, uri, date-time, uuid, etc.)
+    if (fieldSchema.format) {
+      const formatErrors = validateStringFormat(fieldName, value, fieldSchema.format);
+      errors.push(...formatErrors);
     }
   }
   
   // Number constraints
   if ((type === 'number' || type === 'integer') && typeof value === 'number') {
+    // Integer type check
+    if (type === 'integer' && !Number.isInteger(value)) {
+      errors.push(`Field '${fieldName}' must be an integer, got: ${value}`);
+    }
+    
     if (fieldSchema.minimum !== undefined && value < fieldSchema.minimum) {
       errors.push(`Field '${fieldName}' is too small: ${value} < ${fieldSchema.minimum}`);
     }
@@ -1101,7 +1168,7 @@ function validateFieldValue(
     }
   }
   
-  // Array constraints
+  // Array constraints and item validation
   if (type === 'array' && Array.isArray(value)) {
     if (fieldSchema.minItems && value.length < fieldSchema.minItems) {
       errors.push(`Field '${fieldName}' has too few items: ${value.length} < ${fieldSchema.minItems}`);
@@ -1109,6 +1176,118 @@ function validateFieldValue(
     if (fieldSchema.maxItems && value.length > fieldSchema.maxItems) {
       errors.push(`Field '${fieldName}' has too many items: ${value.length} > ${fieldSchema.maxItems}`);
     }
+    
+    // Validate array items if schema is provided
+    if (fieldSchema.items) {
+      value.forEach((item, index) => {
+        const itemErrors = validateFieldValue(`${fieldName}[${index}]`, item, fieldSchema.items, openApiSpec);
+        errors.push(...itemErrors);
+      });
+    }
+    
+    // Check for unique items
+    if (fieldSchema.uniqueItems) {
+      const uniqueValues = new Set(value.map(v => JSON.stringify(v)));
+      if (uniqueValues.size !== value.length) {
+        errors.push(`Field '${fieldName}' must have unique items`);
+      }
+    }
+  }
+  
+  // Object constraints and nested validation
+  if (type === 'object' && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    // Validate nested object against its schema
+    const nestedValidation = validateBodyAgainstSchema(value, fieldSchema, openApiSpec);
+    if (!nestedValidation.valid) {
+      errors.push(...nestedValidation.errors.map(err => `${fieldName}.${err}`));
+    }
+  }
+  
+  return errors;
+}
+
+/**
+ * Validate string format constraints (email, uri, date-time, uuid, etc.)
+ *
+ * @param fieldName - Name of the field being validated
+ * @param value - String value to validate
+ * @param format - Format constraint from schema
+ * @returns Array of validation error messages
+ */
+function validateStringFormat(fieldName: string, value: string, format: string): string[] {
+  const errors: string[] = [];
+  
+  switch (format) {
+    case 'email':
+      // Basic email validation
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+        errors.push(`Field '${fieldName}' must be a valid email address`);
+      }
+      break;
+      
+    case 'uri':
+    case 'url':
+      // Basic URI/URL validation
+      try {
+        new URL(value);
+      } catch {
+        errors.push(`Field '${fieldName}' must be a valid URI/URL`);
+      }
+      break;
+      
+    case 'date-time':
+      // ISO 8601 date-time validation
+      if (isNaN(Date.parse(value))) {
+        errors.push(`Field '${fieldName}' must be a valid ISO 8601 date-time`);
+      }
+      break;
+      
+    case 'date':
+      // Date validation (YYYY-MM-DD)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        errors.push(`Field '${fieldName}' must be a valid date (YYYY-MM-DD)`);
+      }
+      break;
+      
+    case 'time':
+      // Time validation (HH:MM:SS)
+      if (!/^\d{2}:\d{2}:\d{2}$/.test(value)) {
+        errors.push(`Field '${fieldName}' must be a valid time (HH:MM:SS)`);
+      }
+      break;
+      
+    case 'uuid':
+      // UUID validation
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+        errors.push(`Field '${fieldName}' must be a valid UUID`);
+      }
+      break;
+      
+    case 'ipv4':
+      // IPv4 validation
+      if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(value)) {
+        errors.push(`Field '${fieldName}' must be a valid IPv4 address`);
+      }
+      break;
+      
+    case 'ipv6':
+      // Basic IPv6 validation
+      if (!/^([0-9a-f]{0,4}:){7}[0-9a-f]{0,4}$/i.test(value)) {
+        errors.push(`Field '${fieldName}' must be a valid IPv6 address`);
+      }
+      break;
+      
+    case 'hostname':
+      // Basic hostname validation
+      if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(value)) {
+        errors.push(`Field '${fieldName}' must be a valid hostname`);
+      }
+      break;
+      
+    // Add more format validations as needed
+    default:
+      // Unknown format - skip validation
+      break;
   }
   
   return errors;
@@ -1116,8 +1295,161 @@ function validateFieldValue(
 
 
 /**
- * Validate generated body and add warnings
+ * Generate a valid request body from OpenAPI schema with validation
+ * This is the main entry point for schema-based body generation
  * 
+ * @param schema - OpenAPI request body schema
+ * @param openApiSpec - Full OpenAPI spec for resolving $refs
+ * @param scenario - Test scenario (valid/invalid)
+ * @param testId - Unique test identifier
+ * @param timestamp - Timestamp for unique data generation
+ * @returns Generated body with validation result, or null if generation fails
+ */
+export function generateAndValidateBodyFromSchema(
+  schema: any,
+  openApiSpec: any,
+  scenario: BodyScenario = 'valid',
+  testId: string = 'test',
+  timestamp: string = Date.now().toString()
+): { body: Record<string, any> | null; valid: boolean; errors: string[] } {
+  try {
+    // Generate body from schema
+    const body = generateFromSchema(schema, openApiSpec, scenario, testId, timestamp);
+    
+    if (!body || Object.keys(body).length === 0) {
+      return {
+        body: null,
+        valid: false,
+        errors: ['Failed to generate body from schema']
+      };
+    }
+    
+    // Validate generated body against schema
+    const validation = validateBodyAgainstSchema(body, schema, openApiSpec);
+    
+    return {
+      body,
+      valid: validation.valid,
+      errors: validation.errors
+    };
+  } catch (error) {
+    return {
+      body: null,
+      valid: false,
+      errors: [`Body generation failed: ${error instanceof Error ? error.message : String(error)}`]
+    };
+  }
+}
+
+/**
+ * Validate and potentially regenerate a body to match schema requirements
+ * Used when a body exists but may not be valid according to the schema
+ * 
+ * @param body - Existing request body
+ * @param schema - OpenAPI request body schema
+ * @param openApiSpec - Full OpenAPI spec for resolving $refs
+ * @param testId - Unique test identifier
+ * @param timestamp - Timestamp for unique data generation
+ * @returns Validation result with potentially corrected body
+ */
+export function validateAndCorrectBody(
+  body: Record<string, any> | null,
+  schema: any,
+  openApiSpec: any,
+  testId: string = 'test',
+  timestamp: string = Date.now().toString()
+): {
+  body: Record<string, any> | null;
+  valid: boolean;
+  errors: string[];
+  corrected: boolean;
+} {
+  // If no body provided, generate from schema
+  if (!body) {
+    const generated = generateAndValidateBodyFromSchema(schema, openApiSpec, 'valid', testId, timestamp);
+    return {
+      body: generated.body,
+      valid: generated.valid,
+      errors: generated.errors,
+      corrected: true
+    };
+  }
+  
+  // Validate existing body
+  const validation = validateBodyAgainstSchema(body, schema, openApiSpec);
+  
+  if (validation.valid) {
+    return {
+      body,
+      valid: true,
+      errors: [],
+      corrected: false
+    };
+  }
+  
+  // Body is invalid - try to correct it
+  try {
+    // Resolve $ref if present
+    let resolvedSchema = schema;
+    if (schema.$ref) {
+      resolvedSchema = resolveRef(schema.$ref, openApiSpec);
+    }
+    
+    const correctedBody = { ...body };
+    const properties = resolvedSchema.properties || {};
+    const required = resolvedSchema.required || [];
+    
+    // Add missing required fields
+    for (const requiredField of required) {
+      if (!(requiredField in correctedBody)) {
+        const fieldSchema = properties[requiredField];
+        if (fieldSchema) {
+          correctedBody[requiredField] = generateFieldValue(
+            requiredField,
+            fieldSchema,
+            'valid',
+            testId,
+            timestamp,
+            openApiSpec,
+            true
+          );
+        }
+      }
+    }
+    
+    // Fix enum violations
+    for (const [fieldName, value] of Object.entries(correctedBody)) {
+      const fieldSchema = properties[fieldName];
+      if (fieldSchema?.enum && Array.isArray(fieldSchema.enum)) {
+        if (!fieldSchema.enum.includes(value)) {
+          // Replace with first valid enum value
+          correctedBody[fieldName] = fieldSchema.enum[0];
+        }
+      }
+    }
+    
+    // Validate corrected body
+    const correctedValidation = validateBodyAgainstSchema(correctedBody, schema, openApiSpec);
+    
+    return {
+      body: correctedBody,
+      valid: correctedValidation.valid,
+      errors: correctedValidation.errors,
+      corrected: true
+    };
+  } catch (error) {
+    return {
+      body,
+      valid: false,
+      errors: [...validation.errors, `Correction failed: ${error instanceof Error ? error.message : String(error)}`],
+      corrected: false
+    };
+  }
+}
+
+/**
+ * Validate generated body and add warnings
+ *
  * @param body - Generated body
  * @param method - HTTP method
  * @param route - Route information

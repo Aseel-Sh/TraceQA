@@ -137,7 +137,8 @@ export class WatsonxClient {
         options?.systemPrompt || this.config.systemPrompt
       );
 
-      logger.debug(`Sending message to watsonx.ai (${this.conversationHistory.length} messages in history)`);
+      const estimatedInputTokens = WatsonxClient.estimateTokens(input);
+      logger.debug(`Sending message to watsonx.ai (${this.conversationHistory.length} messages in history, ~${estimatedInputTokens} input tokens)`);
 
       // Make API call with retry logic
       const response = await this.withRetry(async () => {
@@ -158,12 +159,21 @@ export class WatsonxClient {
       const responseText = response.result.results[0].generated_text;
       const inputTokens = response.result.results[0].input_token_count || 0;
       const outputTokens = response.result.results[0].generated_token_count || 0;
+      const stopReason = response.result.results[0].stop_reason;
+
+      // Log response metadata for debugging (Issue #9)
+      logger.debug(`Response metadata: length=${responseText.length} chars, inputTokens=${inputTokens}, outputTokens=${outputTokens}, stopReason=${stopReason}`);
+      
+      // Check for potential truncation
+      if (stopReason === 'max_tokens' || stopReason === 'length') {
+        logger.warn(`⚠️ Response may be truncated (stop_reason: ${stopReason})`);
+      }
 
       // Add assistant response to history
       this.addToHistory('assistant', responseText, {
         tokenCount: outputTokens,
         model: this.model,
-        finishReason: response.result.results[0].stop_reason || undefined
+        finishReason: stopReason || undefined
       });
 
       // Update token usage
@@ -175,11 +185,29 @@ export class WatsonxClient {
       return responseText;
     } catch (error) {
       const duration = Date.now() - startTime;
-      logger.error(`Failed to get response from watsonx.ai (${duration}ms):`, error);
+      
+      // Enhanced error logging (Issue #9)
+      const errorType = this.categorizeError(error);
+      logger.error(`Failed to get response from watsonx.ai (${duration}ms, type: ${errorType}):`, error);
+      
+      // Log additional context for debugging
+      if (error && typeof error === 'object') {
+        const errorObj = error as any;
+        if (errorObj.status) {
+          logger.debug(`HTTP Status: ${errorObj.status}`);
+        }
+        if (errorObj.statusText) {
+          logger.debug(`Status Text: ${errorObj.statusText}`);
+        }
+        if (errorObj.body) {
+          logger.debug(`Response Body: ${JSON.stringify(errorObj.body).substring(0, 200)}`);
+        }
+      }
+      
       throw new TraceQAError(
-        `Watsonx API error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        `Watsonx API error (${errorType}): ${error instanceof Error ? error.message : 'Unknown error'}`,
         ErrorCategory.AGENT,
-        { error, duration }
+        { error, duration, errorType, model: this.model, tokenUsage: this.tokenUsage }
       );
     }
   }
@@ -402,6 +430,34 @@ export class WatsonxClient {
       return status === 429 || (status >= 500 && status < 600);
     }
     return false;
+  }
+
+  /**
+   * Categorize error type for better debugging (Issue #9)
+   */
+  private categorizeError(error: unknown): string {
+    if (!error) return 'UNKNOWN';
+    
+    if (typeof error === 'object' && 'status' in error) {
+      const status = (error as { status: number }).status;
+      
+      if (status === 401 || status === 403) return 'AUTH_ERROR';
+      if (status === 429) return 'RATE_LIMIT';
+      if (status === 400) return 'BAD_REQUEST';
+      if (status === 404) return 'NOT_FOUND';
+      if (status >= 500 && status < 600) return 'SERVER_ERROR';
+      
+      return `HTTP_${status}`;
+    }
+    
+    if (error instanceof Error) {
+      if (error.message.includes('timeout')) return 'TIMEOUT';
+      if (error.message.includes('network')) return 'NETWORK_ERROR';
+      if (error.message.includes('ECONNREFUSED')) return 'CONNECTION_REFUSED';
+      if (error.message.includes('ENOTFOUND')) return 'DNS_ERROR';
+    }
+    
+    return 'UNKNOWN';
   }
 
   /**

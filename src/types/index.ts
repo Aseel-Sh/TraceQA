@@ -883,6 +883,13 @@ export interface APIAssertion {
   path?: string;
   operator?: 'equals' | 'contains' | 'matches' | 'lessThan' | 'greaterThan';
   message?: string;
+  /**
+   * Whether this assertion is critical (must pass) or advisory (warning only).
+   * - true: assertion must pass for test to pass
+   * - false/undefined: assertion failure generates warning but doesn't fail test
+   * Default: false for body assertions, true for status assertions
+   */
+  critical?: boolean;
 }
 
 /**
@@ -1017,6 +1024,7 @@ export interface QATaskStep {
 export interface QATask {
   taskId: string;
   acceptanceCriterionId: string;
+  acceptanceCriterionText?: string; // AC text for traceability (Issue #8)
   title: string;
   type: 'api' | 'ui' | 'integration' | 'manual' | 'uncertain';
   priority: 'high' | 'medium' | 'low';
@@ -1027,6 +1035,7 @@ export interface QATask {
   executionMode: 'automated' | 'manual' | 'uncertain';
   reasoning: string;
   uncertainReason?: string | null;
+  generatedBy?: 'ibm' | 'deterministic' | 'unknown'; // Track generation source (Issue #8)
 }
 
 /**
@@ -1070,6 +1079,13 @@ export interface HTTPTestStep {
   expectedStatus: number;
   acceptableStatuses: number[];
   expectedBodyContains?: string[];
+  /**
+   * Whether body assertions are critical (default: false for advisory)
+   * When false, body assertion failures generate warnings but don't fail the test
+   */
+  bodyAssertionsCritical?: boolean;
+  /** Expected response schema for structure validation */
+  expectedBodySchema?: any;
   /** Variables to capture from the response */
   captureVariables?: VariableExtraction[];
 }
@@ -1080,6 +1096,7 @@ export interface HTTPTestStep {
 export interface GeneratedHTTPTest {
   id: string;
   acceptanceCriterionId: string;
+  acceptanceCriterionText?: string; // AC text for traceability (Issue #8)
   qaTaskId: string;
   title: string;
   type: 'api' | 'ui' | 'integration' | 'manual';
@@ -1092,6 +1109,8 @@ export interface GeneratedHTTPTest {
   confidence?: number;
   /** Execution mode suggested: automated|manual|uncertain */
   executionMode?: 'automated' | 'manual' | 'uncertain';
+  /** Track generation source: ibm, deterministic, or unknown (Issue #8) */
+  generatedBy?: 'ibm' | 'deterministic' | 'unknown';
 }
 
 /**
@@ -1134,9 +1153,6 @@ export interface AssertionResult {
 /**
  * HTTP step execution result
  */
-/**
- * HTTP step execution result
- */
 export interface HTTPStepResult {
   stepId: string;
   description: string;
@@ -1150,6 +1166,8 @@ export interface HTTPStepResult {
   passed: boolean;
   duration: number;
   error: string | null;
+  /** Advisory warnings (non-critical assertion failures) */
+  advisoryWarnings?: string[];
   /** Variables captured from this step's response */
   capturedVariables?: Record<string, any>;
   /** Response headers from this step */
@@ -1191,6 +1209,56 @@ export interface DiscoveredRoute {
   sourceSnippet?: string;
   /** Optional validation/schema snippets discovered near the handler */
   validationSnippets?: string[];
+  
+  // OpenAPI Schema Integration (Issue #2)
+  // All schema fields are optional for backward compatibility
+  
+  /** Request body schema from OpenAPI specification */
+  requestSchema?: {
+    /** Required fields in request body */
+    required?: string[];
+    /** Property definitions with types and constraints */
+    properties?: Record<string, any>;
+    /** Schema type (e.g., 'object', 'array') */
+    type?: string;
+    /** Additional schema properties (e.g., additionalProperties, minProperties) */
+    [key: string]: any;
+  };
+  
+  /** Response schemas by status code from OpenAPI specification */
+  responseSchema?: {
+    [statusCode: string]: {
+      /** Response body schema */
+      schema?: any;
+      /** Response description */
+      description?: string;
+      /** Response headers schema */
+      headers?: Record<string, any>;
+    };
+  };
+  
+  /** Path, query, header, and cookie parameters from OpenAPI specification */
+  parameters?: Array<{
+    /** Parameter name */
+    name: string;
+    /** Parameter location */
+    in: 'path' | 'query' | 'header' | 'cookie';
+    /** Whether parameter is required */
+    required?: boolean;
+    /** Parameter schema with type and constraints */
+    schema?: any;
+    /** Parameter description */
+    description?: string;
+    /** Example value */
+    example?: any;
+  }>;
+  
+  /** OpenAPI operation metadata */
+  operationId?: string;
+  /** Tags for categorization */
+  tags?: string[];
+  /** Security requirements */
+  security?: Array<Record<string, string[]>>;
 }
 
 /**

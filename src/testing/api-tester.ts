@@ -221,7 +221,15 @@ export class APITester {
           config.acceptableStatuses
         );
 
-        const allPassed = assertionResults.every(r => r.passed);
+        // Only fail test if critical assertions fail
+        const criticalAssertionsFailed = assertionResults.some(r => {
+          const isCritical = r.assertion.critical !== undefined
+            ? r.assertion.critical
+            : this.isAssertionCriticalByDefault(r.assertion.type);
+          return !r.passed && isCritical;
+        });
+
+        const allPassed = !criticalAssertionsFailed;
         const duration = Date.now() - startTime;
 
         const result: APITestResultWithCapture = {
@@ -470,7 +478,7 @@ export class APITester {
   }
 
   /**
-   * Run all assertions on a response
+   * Run all assertions on a response with advisory support
    */
   private async runAssertions(
     assertions: APIAssertion[],
@@ -483,13 +491,23 @@ export class APITester {
     for (const assertion of assertions) {
       try {
         const result = await this.runAssertion(assertion, response, request, acceptableStatuses);
-        results.push(result);
+        
+        // Determine if assertion is critical
+        const isCritical = assertion.critical !== undefined
+          ? assertion.critical
+          : this.isAssertionCriticalByDefault(assertion.type);
 
         if (result.passed) {
           logger.debug(`Assertion passed: ${assertion.type}`);
         } else {
-          logger.warn(`Assertion failed: ${result.message}`);
+          if (isCritical) {
+            logger.warn(`Critical assertion failed: ${result.message}`);
+          } else {
+            logger.info(`Advisory assertion failed (non-blocking): ${result.message}`);
+          }
         }
+        
+        results.push(result);
       } catch (error) {
         logger.error(`Assertion error: ${assertion.type}`, error);
         results.push({
@@ -504,7 +522,7 @@ export class APITester {
   }
 
   /**
-   * Run a single assertion
+   * Run a single assertion with advisory support
    */
   private async runAssertion(
     assertion: APIAssertion,
@@ -514,10 +532,15 @@ export class APITester {
   ): Promise<{ assertion: APIAssertion; passed: boolean; message: string }> {
     let passed = false;
     let message = '';
+    
+    // Determine if assertion is critical (default based on type)
+    const isCritical = assertion.critical !== undefined
+      ? assertion.critical
+      : this.isAssertionCriticalByDefault(assertion.type);
 
     switch (assertion.type) {
       case AssertionType.STATUS_CODE:
-        // Use acceptableStatuses if provided, otherwise fall back to assertion.expected
+        // Status assertions are always critical
         const statusesToCheck = acceptableStatuses && acceptableStatuses.length > 0
           ? acceptableStatuses
           : (assertion.expected ? [assertion.expected as number] : [200]);
@@ -542,25 +565,28 @@ export class APITester {
         const bodyStr = JSON.stringify(response.body);
         const expectedStr = String(assertion.expected);
         passed = bodyStr.includes(expectedStr);
+        const prefix = isCritical ? '' : '[ADVISORY] ';
         message = passed
-          ? `Body contains "${expectedStr}"`
-          : `Body does not contain "${expectedStr}"`;
+          ? `${prefix}Body contains "${expectedStr}"`
+          : `${prefix}Body does not contain "${expectedStr}"`;
         break;
 
       case AssertionType.BODY_EQUALS:
         passed = JSON.stringify(response.body) === JSON.stringify(assertion.expected);
+        const eqPrefix = isCritical ? '' : '[ADVISORY] ';
         message = passed
-          ? 'Body equals expected value'
-          : 'Body does not equal expected value';
+          ? `${eqPrefix}Body equals expected value`
+          : `${eqPrefix}Body does not equal expected value`;
         break;
 
       case AssertionType.BODY_MATCHES:
         if (typeof assertion.expected === 'string') {
           const regex = new RegExp(assertion.expected);
           passed = regex.test(JSON.stringify(response.body));
+          const matchPrefix = isCritical ? '' : '[ADVISORY] ';
           message = passed
-            ? `Body matches pattern ${assertion.expected}`
-            : `Body does not match pattern ${assertion.expected}`;
+            ? `${matchPrefix}Body matches pattern ${assertion.expected}`
+            : `${matchPrefix}Body does not match pattern ${assertion.expected}`;
         }
         break;
 
@@ -575,11 +601,13 @@ export class APITester {
         break;
 
       case AssertionType.RESPONSE_TIME:
+        // Response time assertions are advisory by default
         if (typeof assertion.expected === 'number') {
           passed = response.duration < assertion.expected;
+          const timePrefix = isCritical ? '' : '[ADVISORY] ';
           message = passed
-            ? `Response time ${response.duration}ms is within limit`
-            : `Response time ${response.duration}ms exceeds limit of ${assertion.expected}ms`;
+            ? `${timePrefix}Response time ${response.duration}ms is within limit`
+            : `${timePrefix}Response time ${response.duration}ms exceeds limit of ${assertion.expected}ms`;
         }
         break;
 
@@ -593,6 +621,27 @@ export class APITester {
     }
 
     return { assertion, passed, message };
+  }
+
+  /**
+   * Determine if an assertion type is critical by default
+   */
+  private isAssertionCriticalByDefault(type: AssertionType): boolean {
+    switch (type) {
+      case AssertionType.STATUS_CODE:
+        return true; // Status is always critical
+      case AssertionType.BODY_CONTAINS:
+      case AssertionType.BODY_EQUALS:
+      case AssertionType.BODY_MATCHES:
+      case AssertionType.RESPONSE_TIME:
+        return false; // Body and timing assertions are advisory by default
+      case AssertionType.HEADER:
+      case AssertionType.JSON_PATH:
+      case AssertionType.CUSTOM:
+        return true; // Other assertions remain critical by default
+      default:
+        return true;
+    }
   }
 
   /**

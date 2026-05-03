@@ -43,6 +43,21 @@ export class TestAgent {
   private decisionEngine: DecisionEngine;
   private mcpManager: MCPClientManager | null = null;
   private state: AgentState;
+  
+  // Generation metrics (Issue #9)
+  private generationMetrics = {
+    totalAttempts: 0,
+    successfulExtractions: 0,
+    failedExtractions: 0,
+    retriesAttempted: 0,
+    retriesSucceeded: 0,
+    compactRetriesAttempted: 0,
+    compactRetriesSucceeded: 0,
+    uncertainMarked: 0,
+    averageResponseLength: 0,
+    responseLengthCount: 0,
+    errorTypes: {} as Record<string, number>
+  };
 
   constructor(config: AgentConfig, mcpManager?: MCPClientManager) {
     // Initialize Watsonx client with system prompt
@@ -82,7 +97,7 @@ export class TestAgent {
   }
 
   /**
-   * Generate QA task suggestions from IBM watsonx
+   * Generate QA task suggestions from IBM watsonx with AC drift detection (Issue #8)
    * Returns AI suggestions array instead of complete test plan
    */
   async generateTests(
@@ -91,10 +106,18 @@ export class TestAgent {
     baseUrl: string
   ): Promise<any[]> {
     logger.info('Generating QA task suggestions from IBM watsonx...');
+    this.generationMetrics.totalAttempts++;
     
     try {
       const prompt = this.buildPrompt(acceptanceCriteria, routes, baseUrl);
       const response = await this.watsonxClient.sendMessage(prompt);
+      
+      // Track response length
+      this.updateAverageResponseLength(response.length);
+      
+      // Log response metadata for debugging
+      logger.debug(`Response length: ${response.length} chars`);
+      logger.debug(`Response preview: ${response.substring(0, 100)}...`);
       
       // Use robust JSON extraction
       const extractionResult: ExtractionResult = safeExtractJSON(response, {
@@ -102,17 +125,96 @@ export class TestAgent {
       });
       
       if (!extractionResult.success) {
-        logger.warn('Failed to extract JSON from IBM response');
+        this.generationMetrics.failedExtractions++;
+        this.trackErrorType(extractionResult.errorDetails?.type || 'UNKNOWN');
+        
+        logger.warn('Failed to extract JSON from IBM response - attempting compact retry');
+        logger.debug(`Extraction error: ${extractionResult.error}`);
+        if (extractionResult.errorDetails) {
+          logger.debug(`Error details: ${JSON.stringify(extractionResult.errorDetails)}`);
+        }
         
         // Save raw output for debugging
         if (extractionResult.rawText) {
-          await this.saveRawResponse(extractionResult.rawText);
+          await this.saveRawResponse(extractionResult.rawText, 'malformed-json-attempt-1');
         }
         
-        // Return empty array - fallback mapper will handle it
-        logger.info('Falling back to deterministic test generation');
-        return [];
+        // Retry with compact prompt (Issue #9: handle malformed/truncated JSON)
+        try {
+          this.generationMetrics.compactRetriesAttempted++;
+          
+          logger.info('Retrying with compact prompt to avoid truncation...');
+          const compactPrompt = this.buildCompactPrompt(acceptanceCriteria, routes, baseUrl);
+          const compactResponse = await this.watsonxClient.sendMessage(compactPrompt);
+          
+          this.updateAverageResponseLength(compactResponse.length);
+          logger.debug(`Compact response length: ${compactResponse.length} chars`);
+          
+          const compactExtraction: ExtractionResult = safeExtractJSON(compactResponse, {
+            saveRawOnFailure: true
+          });
+          
+          if (compactExtraction.success) {
+            this.generationMetrics.compactRetriesSucceeded++;
+            this.generationMetrics.successfulExtractions++;
+            
+            logger.success('✓ Compact retry succeeded - extracted valid JSON');
+            
+            // Validate the compact response
+            const compactData = compactExtraction.data;
+            const compactSuggestions = Array.isArray(compactData) ? compactData : [compactData];
+            
+            if (this.validateJSONStructure(compactSuggestions)) {
+              // Mark remaining ACs as uncertain since we only got one
+              const remainingACs = acceptanceCriteria.slice(1);
+              for (const ac of remainingACs) {
+                compactSuggestions.push({
+                  acceptanceCriterionId: ac.id,
+                  title: `Test ${ac.id}`,
+                  type: 'uncertain',
+                  priority: 'medium',
+                  executionMode: 'uncertain',
+                  steps: [],
+                  expectedResult: ac.expectedResult || 'Not specified',
+                  reasoning: 'Generated from compact prompt',
+                  uncertainReason: 'Original response was malformed/truncated - generated minimal test'
+                });
+              }
+              
+              return compactSuggestions;
+            }
+          }
+          
+          // Compact retry also failed
+          logger.error('Compact retry failed to extract valid JSON');
+          if (compactExtraction.rawText) {
+            await this.saveRawResponse(compactExtraction.rawText, 'malformed-json-attempt-2');
+          }
+        } catch (retryError) {
+          logger.error('Compact retry threw error:', retryError);
+        }
+        
+        // Both attempts failed - mark all as uncertain
+        this.generationMetrics.uncertainMarked += acceptanceCriteria.length;
+        
+        logger.warn('All JSON extraction attempts failed - marking tests as uncertain');
+        this.logGenerationMetrics();
+        
+        return acceptanceCriteria.map(ac => ({
+          acceptanceCriterionId: ac.id,
+          title: `Test ${ac.id}`,
+          type: 'uncertain',
+          priority: 'medium',
+          executionMode: 'uncertain',
+          steps: [],
+          expectedResult: ac.expectedResult || 'Not specified',
+          reasoning: 'Could not generate from IBM',
+          uncertainReason: 'JSON parsing failed after multiple attempts - response was malformed or truncated'
+        }));
       }
+      
+      // Successful extraction
+      this.generationMetrics.successfulExtractions++;
       
       // Validate extracted data
       const data = extractionResult.data;
@@ -136,8 +238,130 @@ export class TestAgent {
         }
       }
       
-      logger.success(`✓ Extracted ${suggestions.length} QA task suggestions from IBM`);
-      return suggestions;
+      // Validate AC alignment for each suggestion (Issue #8)
+      const validatedSuggestions: any[] = [];
+      let hasDrift = false;
+      let driftReasons: string[] = [];
+      
+      for (const suggestion of suggestions) {
+        // Find matching AC
+        const matchingAC = acceptanceCriteria.find(
+          ac => ac.id === suggestion.acceptanceCriterionId || ac.id === suggestion.criterionId
+        );
+        
+        if (!matchingAC) {
+          logger.warn(`No matching AC found for suggestion with ID: ${suggestion.acceptanceCriterionId || suggestion.criterionId}`);
+          hasDrift = true;
+          driftReasons.push(`No matching AC for ${suggestion.acceptanceCriterionId || suggestion.criterionId}`);
+          continue;
+        }
+        
+        // Detect drift
+        const driftCheck = this.detectACDrift(
+          suggestion,
+          matchingAC.id,
+          matchingAC.description || matchingAC.criterion
+        );
+        
+        if (driftCheck.hasDrift) {
+          logger.warn(`AC drift detected for ${matchingAC.id}: ${driftCheck.reason}`);
+          hasDrift = true;
+          driftReasons.push(`${matchingAC.id}: ${driftCheck.reason}`);
+        } else {
+          validatedSuggestions.push(suggestion);
+        }
+      }
+      
+      // If drift detected, retry once with stronger prompt
+      if (hasDrift && validatedSuggestions.length < acceptanceCriteria.length) {
+        this.generationMetrics.retriesAttempted++;
+        
+        logger.warn('AC drift detected, retrying with stronger prompt...');
+        logger.debug(`Drift reasons: ${driftReasons.join('; ')}`);
+        
+        const retryPrompt = this.buildRetryPrompt(
+          acceptanceCriteria,
+          routes,
+          baseUrl,
+          suggestions,
+          driftReasons.join('; ')
+        );
+        
+        const retryResponse = await this.watsonxClient.sendMessage(retryPrompt);
+        const retryExtraction: ExtractionResult = safeExtractJSON(retryResponse, {
+          saveRawOnFailure: true
+        });
+        
+        if (retryExtraction.success) {
+          this.generationMetrics.retriesSucceeded++;
+          
+          let retrySuggestions: any[] = [];
+          const retryData = retryExtraction.data;
+          
+          if (Array.isArray(retryData)) {
+            retrySuggestions = retryData;
+          } else if (retryData && typeof retryData === 'object') {
+            if (Array.isArray(retryData.tasks)) {
+              retrySuggestions = retryData.tasks;
+            } else if (Array.isArray(retryData.testCases)) {
+              retrySuggestions = retryData.testCases;
+            } else if (Array.isArray(retryData.tests)) {
+              retrySuggestions = retryData.tests;
+            } else {
+              retrySuggestions = [retryData];
+            }
+          }
+          
+          // Validate retry suggestions
+          for (const suggestion of retrySuggestions) {
+            const matchingAC = acceptanceCriteria.find(
+              ac => ac.id === suggestion.acceptanceCriterionId || ac.id === suggestion.criterionId
+            );
+            
+            if (matchingAC) {
+              const driftCheck = this.detectACDrift(
+                suggestion,
+                matchingAC.id,
+                matchingAC.description || matchingAC.criterion
+              );
+              
+              if (!driftCheck.hasDrift) {
+                // Replace or add validated suggestion
+                const existingIndex = validatedSuggestions.findIndex(
+                  s => s.acceptanceCriterionId === suggestion.acceptanceCriterionId
+                );
+                if (existingIndex >= 0) {
+                  validatedSuggestions[existingIndex] = suggestion;
+                } else {
+                  validatedSuggestions.push(suggestion);
+                }
+                logger.success(`✓ Retry successful for ${matchingAC.id}`);
+              } else {
+                logger.warn(`Retry still has drift for ${matchingAC.id}: ${driftCheck.reason}`);
+                // Mark as uncertain
+                this.generationMetrics.uncertainMarked++;
+                validatedSuggestions.push({
+                  ...suggestion,
+                  executionMode: 'uncertain',
+                  uncertainReason: `AC drift detected after retry: ${driftCheck.reason}`
+                });
+              }
+            }
+          }
+        } else {
+          logger.warn('Retry failed to extract JSON, using original validated suggestions');
+        }
+      }
+      
+      logger.success(`✓ Extracted ${validatedSuggestions.length} validated QA task suggestions from IBM`);
+      if (hasDrift) {
+        logger.info(`Note: ${driftReasons.length} suggestions had AC drift issues`);
+      }
+      
+      // Log metrics summary
+      this.logGenerationMetrics();
+      
+      return validatedSuggestions;
       
     } catch (error) {
       logger.error('Error generating tests from IBM:', error);
@@ -149,7 +373,7 @@ export class TestAgent {
   }
 
   /**
-   * Build prompt for QA task suggestions
+   * Build prompt for QA task suggestions with strong AC enforcement
    */
   private buildPrompt(
     acceptanceCriteria: any[],
@@ -157,6 +381,14 @@ export class TestAgent {
     baseUrl: string
   ): string {
     const prompt = `You are a QA automation expert. Analyze the following acceptance criteria and API routes to suggest QA tasks.
+
+CRITICAL INSTRUCTIONS - AC ALIGNMENT:
+- You MUST generate exactly ONE task per acceptance criterion
+- Each task MUST directly validate its assigned acceptance criterion
+- Do NOT generate tests for different acceptance criteria or unrelated scenarios
+- Do NOT let AC-4 become a different validation test unrelated to the original AC
+- Include the AC ID in your response to confirm alignment
+- The test description must match the AC intent
 
 Acceptance Criteria:
 ${acceptanceCriteria.map((ac, i) => `${i + 1}. [${ac.id}] ${ac.description || ac.criterion}
@@ -168,17 +400,29 @@ ${routes.map(r => `- ${r.method} ${r.path}${r.description ? ` (${r.description})
 Base URL: ${baseUrl}
 
 For each acceptance criterion, suggest a QA task with:
-- acceptanceCriterionId: The AC ID (e.g., "AC-1")
-- title: Clear task title
+- acceptanceCriterionId: The AC ID (e.g., "AC-1") - MUST match the criterion being tested
+- title: Clear task title that reflects the AC description
 - type: "api", "ui", "integration", "manual", or "uncertain"
 - priority: "high", "medium", or "low"
 - executionMode: "automated", "manual", or "uncertain"
 - steps: Array of test steps with description and expectedOutcome
-- expectedResult: What should happen
-- reasoning: Why this task maps to the AC
+- expectedResult: What should happen (must align with AC expected result)
+- reasoning: Why this task maps to the AC (explain the connection)
 - uncertainReason: (optional) Why automation is uncertain
 
-Return a JSON array of task suggestions. If you cannot safely automate a task, mark it as "uncertain" with a reason.
+VALIDATION CHECKLIST:
+✓ Each task's acceptanceCriterionId matches the AC it tests
+✓ Task title relates to AC description
+✓ Expected result aligns with AC expected result
+✓ Test validates the specific AC, not a different one
+
+RESPONSE FORMAT REQUIREMENTS (CRITICAL):
+⚠️ Return ONLY valid JSON - no explanatory text before or after
+⚠️ Keep response compact to avoid truncation (prefer 1-2 tests per response)
+⚠️ Do NOT include markdown code blocks or formatting
+⚠️ Ensure JSON is complete with all brackets/braces properly closed
+⚠️ Use compact field values - avoid verbose descriptions
+⚠️ If response might be too long, generate fewer tests and mark others as "uncertain"
 
 Example format:
 [
@@ -195,11 +439,174 @@ Example format:
       }
     ],
     "expectedResult": "User registration succeeds with 201 status",
-    "reasoning": "AC-1 requires testing successful registration"
+    "reasoning": "AC-1 requires testing successful registration - this test directly validates that requirement"
   }
 ]
 
-Respond with ONLY the JSON array, no explanations.`;
+IMPORTANT: Respond with ONLY the JSON array. No explanations, no markdown, no extra text.`;
+
+    return prompt;
+  }
+
+  /**
+   * Detect if generated test has drifted from assigned AC (Issue #8)
+   */
+  private detectACDrift(
+    generatedTask: any,
+    expectedACId: string,
+    expectedACText: string
+  ): { hasDrift: boolean; reason?: string } {
+    // Check 1: AC ID mismatch
+    if (generatedTask.acceptanceCriterionId !== expectedACId) {
+      return {
+        hasDrift: true,
+        reason: `AC ID mismatch: expected ${expectedACId}, got ${generatedTask.acceptanceCriterionId}`
+      };
+    }
+
+    // Check 2: Task title/description unrelated to AC
+    const taskText = (generatedTask.title || '').toLowerCase();
+    const acText = expectedACText.toLowerCase();
+    
+    // Extract key terms from AC (ignore common words)
+    const commonWords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should', 'could', 'may', 'might', 'must', 'can', 'shall'];
+    const acWords = acText.split(/\s+/).filter(w => w.length > 3 && !commonWords.includes(w));
+    
+    // Check if task contains at least some key terms from AC
+    const matchingWords = acWords.filter(word => taskText.includes(word));
+    const matchRatio = acWords.length > 0 ? matchingWords.length / acWords.length : 0;
+    
+    if (matchRatio < 0.2 && acWords.length > 2) {
+      return {
+        hasDrift: true,
+        reason: `Task description unrelated to AC: "${generatedTask.title}" does not match "${expectedACText}"`
+      };
+    }
+
+    // Check 3: Expected result mismatch
+    if (generatedTask.expectedResult) {
+      const taskExpected = generatedTask.expectedResult.toLowerCase();
+      const acExpected = (expectedACText.match(/expected:?\s*(.+)/i)?.[1] || '').toLowerCase();
+      
+      if (acExpected && taskExpected && !taskExpected.includes(acExpected.substring(0, 20))) {
+        // Only flag if AC has explicit expected result and task result is completely different
+        const expectedWords = acExpected.split(/\s+/).filter(w => w.length > 3 && !commonWords.includes(w));
+        const matchingExpected = expectedWords.filter(word => taskExpected.includes(word));
+        const expectedMatchRatio = expectedWords.length > 0 ? matchingExpected.length / expectedWords.length : 1;
+        
+        if (expectedMatchRatio < 0.2 && expectedWords.length > 2) {
+          return {
+            hasDrift: true,
+            reason: `Expected result mismatch: task expects "${generatedTask.expectedResult}" but AC expects "${acExpected}"`
+          };
+        }
+      }
+    }
+
+    // Check 4: Test validates different functionality
+    // Look for contradictory keywords
+    const contradictions = [
+      { ac: ['create', 'add', 'register'], task: ['delete', 'remove', 'unregister'] },
+      { ac: ['update', 'modify', 'edit'], task: ['create', 'add', 'delete'] },
+      { ac: ['delete', 'remove'], task: ['create', 'add', 'update'] },
+      { ac: ['get', 'retrieve', 'fetch', 'read'], task: ['create', 'update', 'delete', 'post', 'put'] },
+      { ac: ['valid', 'success', 'accept'], task: ['invalid', 'error', 'reject', 'fail'] },
+      { ac: ['invalid', 'error', 'reject', 'fail'], task: ['valid', 'success', 'accept'] }
+    ];
+
+    for (const { ac: acKeywords, task: taskKeywords } of contradictions) {
+      const hasACKeyword = acKeywords.some(kw => acText.includes(kw));
+      const hasTaskKeyword = taskKeywords.some(kw => taskText.includes(kw));
+      
+      if (hasACKeyword && hasTaskKeyword) {
+        return {
+          hasDrift: true,
+          reason: `Contradictory functionality: AC involves ${acKeywords.join('/')} but task involves ${taskKeywords.join('/')}`
+        };
+      }
+    }
+
+    return { hasDrift: false };
+  }
+
+  /**
+   * Build retry prompt with stronger AC enforcement
+   */
+  private buildRetryPrompt(
+    acceptanceCriteria: any[],
+    routes: any[],
+    baseUrl: string,
+    previousAttempt: any,
+    driftReason: string
+  ): string {
+    const prompt = `RETRY: Previous response drifted from acceptance criteria.
+
+DRIFT DETECTED: ${driftReason}
+
+You MUST stay focused on the assigned acceptance criteria. Do NOT generate tests for different scenarios.
+
+Acceptance Criteria:
+${acceptanceCriteria.map((ac, i) => `${i + 1}. [${ac.id}] ${ac.description || ac.criterion}
+   Expected: ${ac.expectedResult || 'Not specified'}`).join('\n')}
+
+Discovered API Routes:
+${routes.map(r => `- ${r.method} ${r.path}${r.description ? ` (${r.description})` : ''}`).join('\n')}
+
+Base URL: ${baseUrl}
+
+CRITICAL REQUIREMENTS:
+1. Generate EXACTLY ONE task per acceptance criterion
+2. Each task MUST validate its assigned AC, not a different one
+3. Task title MUST reflect the AC description
+4. Expected result MUST align with AC expected result
+5. Include acceptanceCriterionId to confirm alignment
+
+For each acceptance criterion, suggest a QA task with:
+- acceptanceCriterionId: The AC ID (MUST match the criterion)
+- title: Task title that reflects the AC
+- type: "api", "ui", "integration", "manual", or "uncertain"
+- priority: "high", "medium", or "low"
+- executionMode: "automated", "manual", or "uncertain"
+- steps: Array of test steps
+- expectedResult: What should happen (must align with AC)
+- reasoning: Explain how this task validates the specific AC
+
+RESPONSE FORMAT: Return ONLY valid JSON array. No markdown, no explanations, no extra text.`;
+
+    return prompt;
+  }
+
+  /**
+   * Build a compact prompt for JSON parsing retry (when first response was malformed)
+   */
+  private buildCompactPrompt(
+    acceptanceCriteria: any[],
+    routes: any[],
+    baseUrl: string
+  ): string {
+    // Generate for only the first AC to keep response short
+    const firstAC = acceptanceCriteria[0];
+    
+    const prompt = `Generate ONE QA test task for this acceptance criterion:
+
+AC: [${firstAC.id}] ${firstAC.description || firstAC.criterion}
+Expected: ${firstAC.expectedResult || 'Not specified'}
+
+Routes: ${routes.slice(0, 3).map(r => `${r.method} ${r.path}`).join(', ')}
+Base URL: ${baseUrl}
+
+Required fields:
+- acceptanceCriterionId: "${firstAC.id}"
+- title: Brief test title
+- type: "api" or "uncertain"
+- priority: "high", "medium", or "low"
+- executionMode: "automated" or "uncertain"
+- steps: [{"description": "step", "expectedOutcome": "outcome"}]
+- expectedResult: Brief expected result
+- reasoning: Brief reason
+
+CRITICAL: Return ONLY valid JSON array with ONE object. Keep it SHORT to avoid truncation.
+Example: [{"acceptanceCriterionId":"${firstAC.id}","title":"Test ${firstAC.id}","type":"api","priority":"high","executionMode":"automated","steps":[{"description":"Test step","expectedOutcome":"Expected outcome"}],"expectedResult":"Result","reasoning":"Validates ${firstAC.id}"}]`;
 
     return prompt;
   }
@@ -207,7 +614,7 @@ Respond with ONLY the JSON array, no explanations.`;
   /**
    * Save raw response for debugging
    */
-  private async saveRawResponse(rawText: string): Promise<void> {
+  private async saveRawResponse(rawText: string, label?: string): Promise<void> {
     try {
       const debugDir = 'traceqa-debug';
       const fs = await import('fs/promises');
@@ -221,7 +628,8 @@ Respond with ONLY the JSON array, no explanations.`;
       }
       
       const timestamp = Date.now();
-      const filename = `raw-ibm-response-${timestamp}.txt`;
+      const labelPart = label ? `-${label}` : '';
+      const filename = `raw-ibm-response${labelPart}-${timestamp}.txt`;
       const filepath = path.join(debugDir, filename);
       
       await fs.writeFile(filepath, rawText, 'utf-8');
@@ -230,6 +638,45 @@ Respond with ONLY the JSON array, no explanations.`;
       const errorMsg = error instanceof Error ? error.message : String(error);
       logger.warn(`Failed to save raw response: ${errorMsg}`);
     }
+  }
+
+  /**
+   * Validate JSON structure has required fields
+   */
+  private validateJSONStructure(suggestions: any[]): boolean {
+    if (!Array.isArray(suggestions) || suggestions.length === 0) {
+      logger.debug('JSON validation failed: not an array or empty');
+      return false;
+    }
+
+    for (const suggestion of suggestions) {
+      // Check required fields
+      if (!suggestion.acceptanceCriterionId) {
+        logger.debug('JSON validation failed: missing acceptanceCriterionId');
+        return false;
+      }
+      if (!suggestion.title) {
+        logger.debug('JSON validation failed: missing title');
+        return false;
+      }
+      if (!suggestion.type) {
+        logger.debug('JSON validation failed: missing type');
+        return false;
+      }
+      if (!suggestion.executionMode) {
+        logger.debug('JSON validation failed: missing executionMode');
+        return false;
+      }
+      
+      // Validate steps array if present
+      if (suggestion.steps && !Array.isArray(suggestion.steps)) {
+        logger.debug('JSON validation failed: steps is not an array');
+        return false;
+      }
+    }
+
+    logger.debug(`JSON validation passed for ${suggestions.length} suggestions`);
+    return true;
   }
 
   /**
@@ -769,6 +1216,59 @@ Duration: ${results.duration}ms
   private updateTokenUsage(): void {
     this.state.tokenUsage = this.watsonxClient.getTokenUsage();
     this.state.conversationHistory = this.watsonxClient.getHistory();
+  }
+
+  /**
+   * Update average response length metric (Issue #9)
+   */
+  private updateAverageResponseLength(length: number): void {
+    const currentTotal = this.generationMetrics.averageResponseLength * this.generationMetrics.responseLengthCount;
+    this.generationMetrics.responseLengthCount++;
+    this.generationMetrics.averageResponseLength = (currentTotal + length) / this.generationMetrics.responseLengthCount;
+  }
+
+  /**
+   * Track error type for metrics (Issue #9)
+   */
+  private trackErrorType(errorType: string): void {
+    if (!this.generationMetrics.errorTypes[errorType]) {
+      this.generationMetrics.errorTypes[errorType] = 0;
+    }
+    this.generationMetrics.errorTypes[errorType]++;
+  }
+
+  /**
+   * Log generation metrics summary (Issue #9)
+   */
+  private logGenerationMetrics(): void {
+    const metrics = this.generationMetrics;
+    const successRate = metrics.totalAttempts > 0
+      ? ((metrics.successfulExtractions / metrics.totalAttempts) * 100).toFixed(1)
+      : '0.0';
+    
+    logger.info('=== Generation Metrics Summary ===');
+    logger.info(`Total attempts: ${metrics.totalAttempts}`);
+    logger.info(`Successful extractions: ${metrics.successfulExtractions} (${successRate}%)`);
+    logger.info(`Failed extractions: ${metrics.failedExtractions}`);
+    logger.info(`Retries attempted: ${metrics.retriesAttempted} (succeeded: ${metrics.retriesSucceeded})`);
+    logger.info(`Compact retries: ${metrics.compactRetriesAttempted} (succeeded: ${metrics.compactRetriesSucceeded})`);
+    logger.info(`Tests marked uncertain: ${metrics.uncertainMarked}`);
+    logger.info(`Average response length: ${Math.round(metrics.averageResponseLength)} chars`);
+    
+    if (Object.keys(metrics.errorTypes).length > 0) {
+      logger.info('Error types encountered:');
+      for (const [type, count] of Object.entries(metrics.errorTypes)) {
+        logger.info(`  - ${type}: ${count}`);
+      }
+    }
+    logger.info('================================');
+  }
+
+  /**
+   * Get generation metrics (Issue #9)
+   */
+  getGenerationMetrics() {
+    return { ...this.generationMetrics };
   }
 
 }

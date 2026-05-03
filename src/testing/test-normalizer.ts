@@ -16,6 +16,8 @@ import {
 } from '../types/index.js';
 import { DiscoveredRoute } from '../discovery/route-discovery.js';
 import { logger } from '../utils/logger.js';
+import { validateAndCorrectBody } from '../validation/body-generator.js';
+import { matchesPathTemplate } from '../validation/route-matcher.js';
 
 /**
  * Normalization result with error classification
@@ -29,10 +31,10 @@ export interface NormalizedTest {
 }
 
 /**
- * Extended API Test Config with acceptable statuses
+ * Extended API Test Config with expected status
  */
 interface ExtendedAPITestConfig extends APITestConfig {
-  acceptableStatuses?: number[];
+  expectedStatus?: number;
 }
 
 /**
@@ -42,6 +44,7 @@ export interface NormalizationOptions {
   baseUrl?: string;
   discoveredRoutes?: DiscoveredRoute[];
   strictValidation?: boolean;
+  openApiSpec?: any;
 }
 
 /**
@@ -52,16 +55,19 @@ export class TestNormalizer {
   private baseUrl?: string;
   private discoveredRoutes: DiscoveredRoute[];
   private strictValidation: boolean;
+  private openApiSpec?: any;
 
   constructor(options: NormalizationOptions = {}) {
     this.baseUrl = options.baseUrl;
     this.discoveredRoutes = options.discoveredRoutes || [];
     this.strictValidation = options.strictValidation ?? true;
+    this.openApiSpec = options.openApiSpec;
 
     logger.debug('TestNormalizer initialized', {
       baseUrl: this.baseUrl,
       routeCount: this.discoveredRoutes.length,
-      strictValidation: this.strictValidation
+      strictValidation: this.strictValidation,
+      hasOpenApiSpec: !!this.openApiSpec
     });
   }
 
@@ -140,8 +146,8 @@ export class TestNormalizer {
   }
 
   /**
-   * Infer expected status code using generic HTTP semantics
-   * Priority: explicit status > HTTP semantics > undefined
+   * Infer expected status code using schema and generic HTTP semantics
+   * Priority: explicit status > schema-based > HTTP semantics > undefined
    */
   private inferExpectedStatus(testCase: TestCase, endpoint: string, method: HTTPMethod): number | undefined {
     const expectedResult = String(testCase.expectedResult || '').toLowerCase();
@@ -152,8 +158,67 @@ export class TestNormalizer {
       return parseInt(statusMatch[1], 10);
     }
 
-    // Priority 2: Apply generic HTTP semantics
+    // Priority 2: Use schema information if available (Issue #2)
+    const matchedRoute = this.matchRoute(endpoint, method);
+    if (matchedRoute?.responseSchema) {
+      const schemaStatus = this.inferStatusFromSchema(matchedRoute, testCase);
+      if (schemaStatus) {
+        return schemaStatus;
+      }
+    }
+
+    // Priority 3: Apply generic HTTP semantics
     return this.inferExpectedStatusFromSemantics(method, testCase, endpoint);
+  }
+
+  /**
+   * Infer expected status code from OpenAPI response schema (Issue #2)
+   * Uses schema to determine likely success/error status codes
+   */
+  private inferStatusFromSchema(route: DiscoveredRoute, testCase: TestCase): number | undefined {
+    if (!route.responseSchema) {
+      return undefined;
+    }
+
+    const description = `${testCase.name || ''} ${testCase.description || ''} ${testCase.expectedResult || ''}`.toLowerCase();
+    const isFailureScenario = description.includes('invalid') ||
+                             description.includes('error') ||
+                             description.includes('fail');
+
+    // Get available status codes from schema
+    const statusCodes = Object.keys(route.responseSchema).map(code => parseInt(code, 10));
+    
+    if (isFailureScenario) {
+      // Look for error status codes (4xx, 5xx)
+      const errorStatuses = statusCodes.filter(code => code >= 400);
+      if (errorStatuses.length > 0) {
+        // Prefer specific error codes based on description
+        if (description.includes('not found')) {
+          return errorStatuses.find(code => code === 404) || errorStatuses[0];
+        }
+        if (description.includes('unauthorized')) {
+          return errorStatuses.find(code => code === 401) || errorStatuses[0];
+        }
+        if (description.includes('forbidden')) {
+          return errorStatuses.find(code => code === 403) || errorStatuses[0];
+        }
+        if (description.includes('conflict') || description.includes('duplicate')) {
+          return errorStatuses.find(code => code === 409) || errorStatuses[0];
+        }
+        if (description.includes('validation')) {
+          return errorStatuses.find(code => code === 422 || code === 400) || errorStatuses[0];
+        }
+        return errorStatuses[0];
+      }
+    } else {
+      // Look for success status codes (2xx)
+      const successStatuses = statusCodes.filter(code => code >= 200 && code < 300);
+      if (successStatuses.length > 0) {
+        return successStatuses[0];
+      }
+    }
+
+    return undefined;
   }
 
   /**
@@ -431,8 +496,8 @@ export class TestNormalizer {
     // Extract and validate URL
     const urlResult = this.extractAndValidateURL(step, testCase, context, method);
 
-    // Extract request body
-    const body = this.extractBody(step, method);
+    // Extract request body (with schema validation if available)
+    const body = this.extractBody(step, method, urlResult.url);
 
     // Extract headers
     const headers = this.extractHeaders(step);
@@ -602,12 +667,19 @@ export class TestNormalizer {
       };
     }
 
-    // Validate against discovered routes
+    // Validate against discovered routes and schema (Issue #2)
     if (this.strictValidation && this.discoveredRoutes.length > 0) {
       const routeMatch = this.matchRoute(normalizedURL, method);
       if (!routeMatch) {
         logger.warn(`URL ${normalizedURL} with method ${method} does not match any discovered routes`);
         // This is not necessarily an error - the route might be valid but not discovered
+      } else if (routeMatch.parameters) {
+        // Log available schema information for debugging
+        logger.debug(`Matched route with schema: ${routeMatch.path}`, {
+          hasRequestSchema: !!routeMatch.requestSchema,
+          hasResponseSchema: !!routeMatch.responseSchema,
+          parameterCount: routeMatch.parameters.length
+        });
       }
     }
 
@@ -729,29 +801,66 @@ export class TestNormalizer {
   }
 
   /**
-   * Extract request body from test step
+   * Extract request body from test step with schema validation (Issue #3)
+   * Validates body against OpenAPI schema and corrects if needed
    */
-  private extractBody(step: any, method: HTTPMethod): any {
+  private extractBody(step: any, method: HTTPMethod, url?: string): any {
     // Only extract body for methods that support it
     if (![HTTPMethod.POST, HTTPMethod.PUT, HTTPMethod.PATCH].includes(method)) {
       return undefined;
     }
 
-    // Check step.body first (IBM provides this)
+    // Extract raw body from step
+    let body: any;
     if (step.body) {
-      return step.body;
-    }
-
-    // Fallback to step.value
-    if (step.value) {
+      body = step.body;
+    } else if (step.value) {
       try {
-        return JSON.parse(step.value);
+        body = JSON.parse(step.value);
       } catch {
-        return step.value;
+        body = step.value;
       }
     }
 
-    return undefined;
+    // If no body and no schema available, return undefined
+    if (!body && !this.openApiSpec) {
+      return undefined;
+    }
+
+    // Try to get schema for validation (Issue #3)
+    if (this.openApiSpec && url) {
+      const route = this.matchRoute(url, method);
+      if (route?.requestSchema) {
+        logger.debug(`Validating body against schema for ${method} ${route.path}`);
+        
+        // Validate and potentially correct the body
+        const validation = validateAndCorrectBody(
+          body,
+          route.requestSchema,
+          this.openApiSpec,
+          `test-${Date.now()}`,
+          Date.now().toString()
+        );
+        
+        if (!validation.valid) {
+          logger.warn(`Body validation failed for ${method} ${route.path}: ${validation.errors.join(', ')}`);
+          
+          // If body was corrected, use the corrected version
+          if (validation.corrected && validation.body) {
+            logger.info(`Using corrected body for ${method} ${route.path}`);
+            return validation.body;
+          }
+          
+          // If validation failed and couldn't be corrected, log warning but use original
+          logger.warn(`Using original body despite validation errors`);
+        } else if (validation.corrected) {
+          logger.info(`Body was corrected to match schema for ${method} ${route.path}`);
+          return validation.body;
+        }
+      }
+    }
+
+    return body;
   }
 
   /**
@@ -860,6 +969,142 @@ export class TestNormalizer {
       retryDelay: 1000,
       continueOnFailure: false
     };
+  }
+
+  /**
+   * Check if URL has unresolved placeholders
+   * Detects patterns like {id}, :id, <id>, [id] that should be resolved before execution
+   */
+  private hasUnresolvedPlaceholders(url: string): boolean {
+    // Check for common placeholder patterns
+    // {id}, {userId}, {item_id} - OpenAPI/Swagger style
+    // :id, :userId, :item_id - Express/Koa style
+    // <id>, <userId>, <item_id> - Flask/Django style
+    // [id], [userId], [item_id] - Alternative style
+    const placeholderPattern = /\{[^}]+\}|:[a-zA-Z_][a-zA-Z0-9_]*|<[^>]+>|\[[^\]]+\]/;
+    return placeholderPattern.test(url);
+  }
+
+  /**
+   * Check if a test is ready to execute (Enhanced in Issue #4)
+   *
+   * Comprehensive validation checks:
+   * 1. Basic validity (from normalization)
+   * 2. URL presence and format
+   * 3. No unresolved placeholders in URL
+   * 4. Valid HTTP method
+   * 5. Route matches discovered routes (using unified matcher from Issue #1)
+   * 6. Valid expected status code
+   * 7. Body present and valid when required
+   * 8. No obvious schema violations
+   *
+   * @param normalized - Normalized test result
+   * @returns Object indicating if test is ready and reason if not
+   */
+  isTestReady(normalized: NormalizedTest): { ready: boolean; reason?: string } {
+    // Check 1: Basic validity first
+    if (!normalized.isValid) {
+      return {
+        ready: false,
+        reason: normalized.errorMessage || 'Test normalization failed'
+      };
+    }
+
+    const { config } = normalized;
+    const { method, url, body } = config.request;
+
+    // Check 2: URL presence
+    if (!url || url === '') {
+      return {
+        ready: false,
+        reason: 'UNCERTAIN: No URL available for test execution'
+      };
+    }
+
+    // Check 3: No unresolved placeholders in URL
+    if (this.hasUnresolvedPlaceholders(url)) {
+      return {
+        ready: false,
+        reason: `TRACEQA_GENERATION_ISSUE: URL contains unresolved placeholders: ${url}. Placeholders like {id}, :id, <id>, [id] must be resolved before execution.`
+      };
+    }
+
+    // Check 4: Valid HTTP method
+    const validMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+    if (!validMethods.includes(method.toUpperCase())) {
+      return {
+        ready: false,
+        reason: `TRACEQA_GENERATION_ISSUE: Invalid HTTP method: ${method}. Must be one of: ${validMethods.join(', ')}`
+      };
+    }
+
+    // Check 5: Route matches discovered routes (using unified matcher from Issue #1)
+    if (this.discoveredRoutes && this.discoveredRoutes.length > 0) {
+      const urlPath = url.split('?')[0].split('#')[0]; // Remove query and fragment
+      const matchingRoute = this.discoveredRoutes.find(route => {
+        const methodMatches = route.method.toUpperCase() === method.toUpperCase();
+        // Use unified path matching - handles all parameter formats and concrete IDs
+        return methodMatches && matchesPathTemplate(route.path, urlPath);
+      });
+
+      if (!matchingRoute) {
+        return {
+          ready: false,
+          reason: `UNCERTAIN: Route ${method.toUpperCase()} ${urlPath} does not match any discovered route. This may indicate a typo, undiscovered endpoint, or incorrect test generation.`
+        };
+      }
+    }
+
+    // Check 6: Valid expected status code
+    const expectedStatus = (config as ExtendedAPITestConfig).expectedStatus ||
+                          config.assertions?.find(a => a.type === AssertionType.STATUS_CODE)?.expected;
+    
+    if (expectedStatus !== undefined) {
+      const statusNum = typeof expectedStatus === 'number' ? expectedStatus : parseInt(String(expectedStatus), 10);
+      if (isNaN(statusNum) || statusNum < 100 || statusNum > 599) {
+        return {
+          ready: false,
+          reason: `TRACEQA_GENERATION_ISSUE: Invalid expected status code: ${expectedStatus}. Must be a valid HTTP status code (100-599).`
+        };
+      }
+    }
+
+    // Check 7 & 8: Body validation for methods that require it
+    if ([HTTPMethod.POST, HTTPMethod.PUT, HTTPMethod.PATCH].includes(method as HTTPMethod)) {
+      // Try to get route and schema
+      const route = this.matchRoute(url, method as HTTPMethod);
+      
+      if (route?.requestSchema && this.openApiSpec) {
+        // Schema is available - validate body
+        if (!body) {
+          return {
+            ready: false,
+            reason: `UNCERTAIN: ${method} request requires a body but none was provided. Schema is available but body generation failed.`
+          };
+        }
+
+        // Validate body against schema
+        const validation = validateAndCorrectBody(
+          body,
+          route.requestSchema,
+          this.openApiSpec
+        );
+
+        if (!validation.valid) {
+          return {
+            ready: false,
+            reason: `UNCERTAIN: Request body does not match schema requirements: ${validation.errors.join(', ')}`
+          };
+        }
+      } else if (!body) {
+        // No schema available, but body is missing for a method that typically needs one
+        logger.warn(`${method} request has no body and no schema available for validation`);
+        // Don't mark as not ready - the API might accept empty body
+      }
+    }
+
+    // All validation checks passed
+    return { ready: true };
   }
 }
 

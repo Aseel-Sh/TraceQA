@@ -161,6 +161,27 @@ export class TestContext {
   }
 
   /**
+   * Extract ID from Location header URL
+   * Handles formats like: /api/users/123, /users/abc-def-123, https://api.com/items/456
+   */
+  private extractIdFromLocation(locationUrl: string): string | undefined {
+    if (!locationUrl) return undefined;
+    
+    // Try to extract the last segment of the URL path
+    // Remove query string and hash
+    const cleanUrl = locationUrl.split('?')[0].split('#')[0];
+    
+    // Extract last path segment
+    const segments = cleanUrl.split('/').filter(s => s.length > 0);
+    if (segments.length === 0) return undefined;
+    
+    const lastSegment = segments[segments.length - 1];
+    
+    // Return the last segment as the ID
+    return lastSegment;
+  }
+
+  /**
    * Extract and store value from response
    */
   extractAndStore(response: any, extraction: VariableExtraction): boolean {
@@ -181,7 +202,18 @@ export class TestContext {
           break;
       }
 
-      const value = this.extractValue(source, extraction.path);
+      let value = this.extractValue(source, extraction.path);
+      
+      // Special handling for Location header - extract ID from URL
+      if (extraction.source === 'headers' &&
+          extraction.path.toLowerCase() === 'location' &&
+          typeof value === 'string') {
+        const extractedId = this.extractIdFromLocation(value);
+        if (extractedId) {
+          value = extractedId;
+          logger.debug(`Extracted ID '${extractedId}' from Location header: ${value}`);
+        }
+      }
       
       if (value === undefined) {
         logger.warn(`Failed to extract value for '${extraction.name}' from path '${extraction.path}'`);

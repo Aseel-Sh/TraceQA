@@ -244,22 +244,24 @@ export class ReportGenerator {
         result => result.acceptanceCriterionId === criterion.id
       );
 
-      // Calculate coverage metrics only from ready tests that actually ran.
-      const readyTestIds = new Set(
-        relatedTests.filter(test => test.status === 'ready').map(test => test.id)
-      );
+      // Calculate coverage metrics using consistent classification logic
+      // EXECUTED = tests that actually ran (passed + failed, excludes uncertain/manual/skipped)
+      // This aligns with the summary counting logic
       const executedResults = relatedResults.filter(
-        result => readyTestIds.has(result.testId) &&
-                  result.classification.classification !== 'uncertain' &&
-                  result.classification.classification !== 'manual' &&
-                  result.classification.classification !== 'skipped'
+        result => result.classification.classification === 'passed' ||
+                  result.classification.classification === 'application_failure' ||
+                  result.classification.classification === 'traceqa_generation_issue' ||
+                  result.classification.classification === 'infrastructure_failure'
       );
+      
       const testsExecuted = executedResults.length;
       const testsPassed = executedResults.filter(
         r => r.classification.classification === 'passed'
       ).length;
       const testsFailed = executedResults.filter(
-        r => r.classification.classification !== 'passed'
+        r => r.classification.classification === 'application_failure' ||
+            r.classification.classification === 'traceqa_generation_issue' ||
+            r.classification.classification === 'infrastructure_failure'
       ).length;
 
       entries.push({
@@ -323,11 +325,18 @@ export class ReportGenerator {
     ).length;
 
     // Execution results statistics using classification as primary metric
-    // EXECUTED = tests that actually ran (excludes skipped and manual)
-    // NOT EXECUTED = skipped + manual (require human intervention or were not run)
+    // Key principles:
+    // 1. TOTAL = all generated tests (ready + uncertain + manual)
+    // 2. EXECUTED = tests that actually ran (passed + failed, excludes skipped/uncertain/manual)
+    // 3. NOT EXECUTED = tests not run (uncertain + manual + skipped)
+    // 4. FAILED = only tests that ran and failed (application + generation + infrastructure failures)
+    // 5. Advisory warnings do NOT count as failures
     
     // Use generated tests as the base for totals
     const generatedTotal = testSuite.summary.totalGenerated;
+    const readyCount = testSuite.summary.readyTests;
+    const uncertainCount = testSuite.summary.uncertainTests;
+    const manualCount = testSuite.summary.manualTests;
 
     // Detect run-level infrastructure failure (single result added by executor)
     const runLevelFailure = testResults.find(r => r.testId && r.testId.startsWith('run-infrastructure-failure'));
@@ -335,42 +344,53 @@ export class ReportGenerator {
     // Count classifications only for generated tests (ignore run-level artifacts)
     const generatedResults = testResults.filter(r => testSuite.tests.some(t => t.id === r.testId));
 
+    // Count by classification (these are mutually exclusive)
     const passed = generatedResults.filter(r => r.classification.classification === 'passed').length;
     const applicationFailures = generatedResults.filter(r => r.classification.classification === 'application_failure').length;
     const generationIssues = generatedResults.filter(r => r.classification.classification === 'traceqa_generation_issue').length;
     const infrastructureFailures = generatedResults.filter(r => r.classification.classification === 'infrastructure_failure').length;
-    const uncertain = generatedResults.filter(r => r.classification.classification === 'uncertain').length;
-    const skipped = generatedResults.filter(r => r.classification.classification === 'skipped').length;
-    const manual = generatedResults.filter(r => r.classification.classification === 'manual').length;
+    const uncertainResults = generatedResults.filter(r => r.classification.classification === 'uncertain').length;
+    const skippedResults = generatedResults.filter(r => r.classification.classification === 'skipped').length;
+    const manualResults = generatedResults.filter(r => r.classification.classification === 'manual').length;
 
-    // Executed = number of generated ready tests that actually ran (exclude uncertain/manual)
-    const executed = generatedResults.filter(r => {
-      const corresponding = testSuite.tests.find(t => t.id === r.testId);
-      return corresponding && corresponding.status === 'ready' &&
-             r.classification.classification !== 'uncertain' &&
-             r.classification.classification !== 'manual' &&
-             r.classification.classification !== 'skipped';
-    }).length;
-
-    const notExecuted = generatedTotal - executed;
+    // Calculate derived counts
+    // EXECUTED = tests that actually ran (passed + all failure types, excludes uncertain/manual/skipped)
+    const executed = passed + applicationFailures + generationIssues + infrastructureFailures;
+    
+    // FAILED = only tests that ran and had critical failures (excludes advisory warnings)
     const failed = applicationFailures + generationIssues + infrastructureFailures;
     
-    // Validation: ensure counts add up correctly
-    const countCheck = executed + notExecuted;
-    if (countCheck !== generatedTotal) {
-      logger.warn(`Count validation failed: executed(${executed}) + notExecuted(${notExecuted}) = ${countCheck} != generatedTotal(${generatedTotal})`);
-    }
-
-    const failedCheck = applicationFailures + generationIssues + infrastructureFailures;
-    if (failedCheck !== failed) {
-      logger.warn(`Failed count validation: sum of failure types(${failedCheck}) != failed(${failed})`);
+    // NOT EXECUTED = tests that were not run
+    const notExecuted = uncertainResults + manualResults + skippedResults;
+    
+    // Validate count consistency
+    const validationErrors = this.validateReportCounts({
+      total: generatedTotal,
+      ready: readyCount,
+      uncertain: uncertainCount,
+      manual: manualCount,
+      executed,
+      passed,
+      failed,
+      skipped: skippedResults,
+      applicationFailures,
+      generationIssues,
+      infrastructureFailures,
+      uncertainResults,
+      manualResults,
+      notExecuted
+    });
+    
+    if (validationErrors.length > 0) {
+      logger.warn('Report count validation errors:');
+      validationErrors.forEach((err: string) => logger.warn(`  - ${err}`));
     }
 
     // Determine merge readiness based on classification
     let mergeReadiness: 'ready' | 'not_ready' | 'uncertain' = 'ready';
     if (applicationFailures > 0) {
       mergeReadiness = 'not_ready';
-    } else if (generationIssues > 0 || infrastructureFailures > 0 || uncertain > 2) {
+    } else if (generationIssues > 0 || infrastructureFailures > 0 || uncertainResults > 2) {
       mergeReadiness = 'uncertain';
     }
 
@@ -378,7 +398,7 @@ export class ReportGenerator {
     let riskLevel: 'low' | 'medium' | 'high' = 'low';
     if (applicationFailures > 2 || failed > 3) {
       riskLevel = 'high';
-    } else if (applicationFailures > 0 || generationIssues > 0 || infrastructureFailures > 0 || uncertain > 2) {
+    } else if (applicationFailures > 0 || generationIssues > 0 || infrastructureFailures > 0 || uncertainResults > 2) {
       riskLevel = 'medium';
     }
 
@@ -411,14 +431,94 @@ export class ReportGenerator {
         applicationFailures,
         generationIssues,
         infrastructureFailures,
-        uncertain,
-        skipped,
-        manual,
+        uncertain: uncertainResults,
+        skipped: skippedResults,
+        manual: manualResults,
         runLevelInfrastructureFailure: !!runLevelFailure
       },
       mergeReadiness,
       riskLevel
     };
+  }
+
+  /**
+   * Validate report count consistency
+   * Ensures all counts add up correctly and follow the rules:
+   * 1. total = ready + uncertain + manual
+   * 2. executed ≤ ready
+   * 3. executed = passed + failed
+   * 4. failed = applicationFailures + generationIssues + infrastructureFailures
+   * 5. notExecuted = uncertain + manual + skipped
+   *
+   * @param counts - Object containing all count values
+   * @returns Array of validation error messages (empty if valid)
+   */
+  private validateReportCounts(counts: {
+    total: number;
+    ready: number;
+    uncertain: number;
+    manual: number;
+    executed: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+    applicationFailures: number;
+    generationIssues: number;
+    infrastructureFailures: number;
+    uncertainResults: number;
+    manualResults: number;
+    notExecuted: number;
+  }): string[] {
+    const errors: string[] = [];
+    
+    // Rule 1: Total should equal ready + uncertain + manual
+    const totalCheck = counts.ready + counts.uncertain + counts.manual;
+    if (counts.total !== totalCheck) {
+      errors.push(
+        `Total count mismatch: total(${counts.total}) != ready(${counts.ready}) + uncertain(${counts.uncertain}) + manual(${counts.manual}) = ${totalCheck}`
+      );
+    }
+    
+    // Rule 2: Executed should not exceed ready
+    if (counts.executed > counts.ready) {
+      errors.push(
+        `Executed(${counts.executed}) exceeds ready(${counts.ready})`
+      );
+    }
+    
+    // Rule 3: Executed should equal passed + failed
+    const executedCheck = counts.passed + counts.failed;
+    if (counts.executed !== executedCheck) {
+      errors.push(
+        `Executed count mismatch: executed(${counts.executed}) != passed(${counts.passed}) + failed(${counts.failed}) = ${executedCheck}`
+      );
+    }
+    
+    // Rule 4: Failed should equal sum of failure types
+    const failedCheck = counts.applicationFailures + counts.generationIssues + counts.infrastructureFailures;
+    if (counts.failed !== failedCheck) {
+      errors.push(
+        `Failed count mismatch: failed(${counts.failed}) != applicationFailures(${counts.applicationFailures}) + generationIssues(${counts.generationIssues}) + infrastructureFailures(${counts.infrastructureFailures}) = ${failedCheck}`
+      );
+    }
+    
+    // Rule 5: Not executed should equal uncertain + manual + skipped
+    const notExecutedCheck = counts.uncertainResults + counts.manualResults + counts.skipped;
+    if (counts.notExecuted !== notExecutedCheck) {
+      errors.push(
+        `Not executed count mismatch: notExecuted(${counts.notExecuted}) != uncertainResults(${counts.uncertainResults}) + manualResults(${counts.manualResults}) + skipped(${counts.skipped}) = ${notExecutedCheck}`
+      );
+    }
+    
+    // Rule 6: Total should equal executed + notExecuted
+    const totalCheck2 = counts.executed + counts.notExecuted;
+    if (counts.total !== totalCheck2) {
+      errors.push(
+        `Total count mismatch: total(${counts.total}) != executed(${counts.executed}) + notExecuted(${counts.notExecuted}) = ${totalCheck2}`
+      );
+    }
+    
+    return errors;
   }
 
   /**
@@ -812,6 +912,7 @@ export class ReportGenerator {
 
   /**
    * Display merge readiness in console
+   * Uses the same counts as report.json to ensure consistency
    */
   private displayMergeReadiness(
     mergeReadiness: 'ready' | 'not_ready' | 'uncertain',
@@ -829,13 +930,22 @@ export class ReportGenerator {
     }
 
     console.log('='.repeat(80));
-    console.log(`\nTests: ${summary.executionResults.executed}/${summary.executionResults.total} executed (${summary.executionResults.notExecuted} not executed)`);
-    console.log(`Passed: ${summary.executionResults.passed}`);
-    console.log(`Failed: ${summary.executionResults.failed}`);
-    console.log(`  - Application Failures: ${summary.executionResults.applicationFailures}`);
-    console.log(`  - Test Generation Issues: ${summary.executionResults.generationIssues}`);
-    console.log(`  - Infrastructure Failures: ${summary.executionResults.infrastructureFailures}`);
-    console.log(`  - Uncertain: ${summary.executionResults.uncertain}`);
+    
+    // Display counts that match report.json exactly
+    console.log(`\nGenerated Tests: ${summary.generatedTests.total} (${summary.generatedTests.ready} ready, ${summary.generatedTests.uncertain} uncertain, ${summary.generatedTests.manual} manual)`);
+    console.log(`Executed: ${summary.executionResults.executed}/${summary.generatedTests.ready} ready tests`);
+    console.log(`Not Executed: ${summary.executionResults.notExecuted} (${summary.executionResults.uncertain} uncertain, ${summary.executionResults.manual} manual, ${summary.executionResults.skipped} skipped)`);
+    console.log('');
+    console.log(`Results:`);
+    console.log(`  ✓ Passed: ${summary.executionResults.passed}`);
+    console.log(`  ✗ Failed: ${summary.executionResults.failed}`);
+    console.log(`    - Application Failures: ${summary.executionResults.applicationFailures} (real bugs)`);
+    console.log(`    - Test Generation Issues: ${summary.executionResults.generationIssues} (TraceQA issues)`);
+    console.log(`    - Infrastructure Failures: ${summary.executionResults.infrastructureFailures} (network/env issues)`);
+    
+    if (summary.executionResults.runLevelInfrastructureFailure) {
+      console.log(`\n⚠️  Run-level infrastructure failure detected - tests could not be executed`);
+    }
     console.log('');
   }
 

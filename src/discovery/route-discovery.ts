@@ -12,6 +12,42 @@ export interface DiscoveredRoute {
   sourceSnippet?: string;
   /** Optional small set of validation/schema snippets discovered near handler */
   validationSnippets?: string[];
+  
+  // OpenAPI Schema Integration (Issue #2)
+  // All schema fields are optional for backward compatibility
+  
+  /** Request body schema from OpenAPI specification */
+  requestSchema?: {
+    required?: string[];
+    properties?: Record<string, any>;
+    type?: string;
+    [key: string]: any;
+  };
+  
+  /** Response schemas by status code from OpenAPI specification */
+  responseSchema?: {
+    [statusCode: string]: {
+      schema?: any;
+      description?: string;
+      headers?: Record<string, any>;
+    };
+  };
+  
+  /** Path, query, header, and cookie parameters from OpenAPI specification */
+  parameters?: Array<{
+    name: string;
+    in: 'path' | 'query' | 'header' | 'cookie';
+    required?: boolean;
+    schema?: any;
+    description?: string;
+    example?: any;
+  }>;
+  
+  /** OpenAPI operation metadata */
+  operationId?: string;
+  description?: string;
+  tags?: string[];
+  security?: Array<Record<string, string[]>>;
 }
 
 export interface RouteDiscoveryResult {
@@ -289,16 +325,61 @@ async function discoverRoutesFromOpenAPI(projectPath: string): Promise<Discovere
         spec = yaml.load(content);
       }
       
-      // Parse OpenAPI spec
+      // Parse OpenAPI spec with full schema extraction (Issue #2)
       if (spec.paths) {
         for (const [routePath, methods] of Object.entries(spec.paths)) {
           for (const [method, details] of Object.entries(methods as any)) {
             if (['get', 'post', 'put', 'delete', 'patch', 'options', 'head'].includes(method)) {
+              const operation = details as any;
+              
+              // Extract request body schema
+              let requestSchema: any = undefined;
+              if (operation.requestBody?.content) {
+                const contentType = Object.keys(operation.requestBody.content)[0];
+                if (contentType && operation.requestBody.content[contentType]?.schema) {
+                  requestSchema = operation.requestBody.content[contentType].schema;
+                }
+              }
+              
+              // Extract response schemas by status code
+              const responseSchema: Record<string, any> = {};
+              if (operation.responses) {
+                for (const [statusCode, response] of Object.entries(operation.responses as any)) {
+                  const resp = response as any;
+                  responseSchema[statusCode] = {
+                    description: resp.description,
+                    schema: resp.content ?
+                      resp.content[Object.keys(resp.content)[0]]?.schema :
+                      undefined,
+                    headers: resp.headers
+                  };
+                }
+              }
+              
+              // Extract parameters (path, query, header, cookie)
+              const parameters = operation.parameters?.map((param: any) => ({
+                name: param.name,
+                in: param.in,
+                required: param.required,
+                schema: param.schema,
+                description: param.description,
+                example: param.example
+              })) || [];
+              
+              // Build discovered route with full schema information
               routes.push({
                 method: method.toUpperCase(),
                 path: routePath,
-                handler: (details as any).operationId,
-                file: filePath
+                handler: operation.operationId,
+                file: filePath,
+                description: operation.description || operation.summary,
+                operationId: operation.operationId,
+                tags: operation.tags,
+                security: operation.security,
+                // Schema fields for evidence-based testing
+                requestSchema,
+                responseSchema: Object.keys(responseSchema).length > 0 ? responseSchema : undefined,
+                parameters: parameters.length > 0 ? parameters : undefined
               });
             }
           }

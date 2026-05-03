@@ -45,14 +45,14 @@ export interface ValidationResult {
  */
 export interface ResourceAction {
   resource: string | null;
-  action: 'create' | 'read' | 'update' | 'delete' | 'list' | 'login' | 'register' | 'verify' | 'activate' | 'reset' | 'refresh' | 'search' | null;
+  action: 'create' | 'read' | 'update' | 'delete' | 'list' | null;
   keywords: string[];
 }
 
 /**
- * HTTP method mapping for different action types
- * Does NOT include hardcoded action types like 'auth' or 'health'
- * Those should be inferred from actual routes and IBM reasoning
+ * HTTP method mapping for generic CRUD action types
+ * GENERIC ONLY - No business-specific actions like 'login', 'register', 'auth'
+ * Business logic should be inferred from route paths and AI reasoning
  */
 const ACTION_TO_METHOD_MAP: Record<string, string[]> = {
   create: ['POST'],
@@ -60,33 +60,23 @@ const ACTION_TO_METHOD_MAP: Record<string, string[]> = {
   update: ['PUT', 'PATCH'],
   delete: ['DELETE'],
   list: ['GET'],
-  login: ['POST'],
-  register: ['POST'],
-  verify: ['POST', 'GET'],
-  activate: ['POST', 'PUT'],
-  reset: ['POST'],
-  refresh: ['POST'],
-  search: ['GET', 'POST'],
 };
 
 /**
- * Action verb patterns for detecting generic CRUD operations
- * Intentionally avoids business-specific keywords like 'login', 'register', 'auth', 'token'
- * Those concepts are handled by IBM reasoning, not hardcoded patterns
+ * Generic action verb patterns for detecting CRUD operations
+ * IMPORTANT: Only includes generic REST/CRUD verbs
+ * NO business-specific keywords (login, register, auth, verify, etc.)
+ * Business logic is domain-specific and should be handled by:
+ * - Route path analysis (e.g., /auth/login, /users/register)
+ * - AI reasoning from acceptance criteria
+ * - OpenAPI schema descriptions
  */
 const ACTION_PATTERNS = {
-  create: /\b(create|add|submit|post|new)\b/i,
-  read: /\b(get|retrieve|fetch|view|check|show)\b/i,
+  create: /\b(create|add|submit|post|new|insert)\b/i,
+  read: /\b(get|retrieve|fetch|view|show|read|find)\b/i,
   update: /\b(update|edit|modify|change|patch|put)\b/i,
   delete: /\b(delete|remove|destroy)\b/i,
   list: /\b(list|all|index|collection|retrieve\s+all)\b/i,
-  login: /\b(login|log\s*in|signin|sign\s*in|authenticate|auth)\b/i,
-  register: /\b(register|signup|sign\s*up|create\s+account)\b/i,
-  verify: /\b(verify|validate|confirm|check)\b/i,
-  activate: /\b(activate|enable)\b/i,
-  reset: /\b(reset|forgot|recover)\b/i,
-  refresh: /\b(refresh|renew)\b/i,
-  search: /\b(search|find|query|filter)\b/i,
 };
 
 /**
@@ -109,82 +99,92 @@ function extractKeywords(text: string): string[] {
 }
 
 /**
- * Detect action from text using generic CRUD patterns only
- * Does NOT attempt to detect business-specific actions like 'auth', 'health', etc.
- * Those require inspection of actual route paths and AI reasoning.
- * 
+ * Detect action from text using GENERIC CRUD patterns only
+ *
+ * IMPORTANT: This function is intentionally generic and domain-agnostic.
+ * It only detects standard REST/CRUD operations (create, read, update, delete, list).
+ *
+ * Business-specific actions (login, register, verify, etc.) should be:
+ * - Inferred from route paths (e.g., /auth/login, /users/verify)
+ * - Determined by AI reasoning from acceptance criteria
+ * - Extracted from OpenAPI schema descriptions
+ *
  * @param text - Text to analyze (acceptance criterion, task title, etc.)
- * @returns Detected action and extracted keywords
- * 
+ * @returns Detected generic action and extracted keywords
+ *
  * @example
  * ```typescript
  * detectResourceAndAction("User should be able to create new items")
  * // Returns: { resource: null, action: "create", keywords: [...] }
- * 
+ *
  * detectResourceAndAction("Retrieve system status")
  * // Returns: { resource: null, action: "read", keywords: [...] }
+ *
+ * detectResourceAndAction("Login with valid credentials")
+ * // Returns: { resource: null, action: null, keywords: ["login", "valid", "credentials"] }
+ * // Note: 'login' is in keywords but not detected as action - it's business-specific
  * ```
  */
 export function detectResourceAndAction(text: string): ResourceAction {
   const keywords = extractKeywords(text);
   
-  // Detect action using enhanced patterns (including domain-specific actions)
+  // Detect GENERIC CRUD action only
   let action: ResourceAction['action'] = null;
-  let bestActionScore = 0;
   
-  // Try all action patterns and pick the best match
+  // Try all generic action patterns
   for (const [actionType, pattern] of Object.entries(ACTION_PATTERNS)) {
     if (pattern.test(text)) {
-      // Calculate score based on pattern specificity
-      // Domain-specific actions (login, register, etc.) get higher priority
-      const isDomainSpecific = ['login', 'register', 'verify', 'activate', 'reset', 'refresh', 'search'].includes(actionType);
-      const score = isDomainSpecific ? 2 : 1;
-      
-      if (score > bestActionScore) {
-        action = actionType as ResourceAction['action'];
-        bestActionScore = score;
-      }
+      action = actionType as ResourceAction['action'];
+      break; // Use first match (patterns are ordered by priority)
     }
   }
   
-  // Re-enable resource detection from paths and text
-  // Extract potential resource names from text (nouns that might be API resources)
+  // Extract potential resource names from text
+  // This is generic - looks for nouns that could be API resources
   const resource = extractResourceFromText(text);
   
   return { resource, action, keywords };
 }
 
 /**
- * Extract potential resource name from text
- * Looks for common REST resource patterns
+ * Extract potential resource name from text using GENERIC patterns
+ *
+ * IMPORTANT: This function extracts common nouns that might represent API resources.
+ * It does NOT hardcode specific business domains (e-commerce, auth, etc.).
+ *
+ * Instead, it looks for:
+ * - Plural nouns (likely collections: /users, /items, /orders)
+ * - Common REST resource naming patterns
+ * - Path segments that look like resource names
+ *
+ * The function is intentionally broad to work across any API domain.
+ *
+ * @param text - Text to analyze
+ * @returns Extracted resource name in singular form, or null
  */
 function extractResourceFromText(text: string): string | null {
   const textLower = text.toLowerCase();
   
-  // Common resource patterns in REST APIs
-  const resourcePatterns = [
-    /\b(user|account|profile|customer|client)s?\b/i,
-    /\b(product|item|article|post|entry)s?\b/i,
-    /\b(order|transaction|payment|invoice)s?\b/i,
-    /\b(comment|review|rating|feedback)s?\b/i,
-    /\b(category|tag|label|group)s?\b/i,
-    /\b(file|document|image|media)s?\b/i,
-    /\b(message|notification|alert|email)s?\b/i,
-    /\b(session|token|credential|auth)s?\b/i,
-    /\b(setting|config|preference|option)s?\b/i,
-    /\b(report|analytics|stat|metric)s?\b/i,
-  ];
+  // Generic pattern: Look for plural nouns (common in REST APIs)
+  // Matches: "users", "items", "orders", "products", etc.
+  // This is domain-agnostic - works for any API
+  const pluralNounPattern = /\b([a-z]{3,})(s|es)\b/gi;
+  const matches = textLower.matchAll(pluralNounPattern);
   
-  for (const pattern of resourcePatterns) {
-    const match = textLower.match(pattern);
-    if (match) {
-      // Return the matched resource in singular form
-      let resource = match[1];
-      // Remove trailing 's' if present
-      if (resource.endsWith('s') && resource.length > 3) {
-        resource = resource.slice(0, -1);
-      }
-      return resource;
+  for (const match of matches) {
+    const word = match[1];
+    
+    // Filter out common English words that aren't likely resources
+    const commonWords = new Set([
+      'this', 'that', 'these', 'those', 'what', 'when', 'where', 'which',
+      'should', 'could', 'would', 'must', 'can', 'will', 'shall',
+      'has', 'have', 'had', 'does', 'did', 'was', 'were', 'been',
+      'make', 'take', 'give', 'come', 'goes', 'goes', 'comes',
+    ]);
+    
+    if (!commonWords.has(word) && word.length >= 3) {
+      // Return first valid resource found (singular form)
+      return word;
     }
   }
   
@@ -241,38 +241,174 @@ function pathMatchesResource(path: string, resource: string | null): boolean {
 
 /**
  * Check if path contains parameter placeholders
- * e.g., /users/{id}, /users/:id, /users/[id]
+ * Supports multiple formats: {id}, :id, <id>, [id]
+ *
+ * @param path - Path to check
+ * @returns True if path contains any parameter placeholder format
+ *
+ * @example
+ * ```typescript
+ * hasPathParameters('/users/{id}')     // true
+ * hasPathParameters('/users/:userId')  // true
+ * hasPathParameters('/users/<id>')     // true
+ * hasPathParameters('/users/[id]')     // true
+ * hasPathParameters('/users/123')      // false
+ * ```
  */
 function hasPathParameters(path: string): boolean {
-  return /\{[^}]+\}|:[a-zA-Z_][a-zA-Z0-9_]*|\[[^\]]+\]/.test(path);
+  return /\{[^}]+\}|:[a-zA-Z_][a-zA-Z0-9_]*|<[^>]+>|\[[^\]]+\]/.test(path);
 }
 
 /**
- * Normalize a path for comparison: remove trailing slash, strip base URL if present,
- * and normalize parameter placeholders to a common token.
+ * Normalize a path for matching - handles all URL formats and parameter styles
+ *
+ * This is the CORE function for unified route matching. It ensures that:
+ * - Absolute URLs are converted to paths
+ * - Query strings are removed
+ * - Trailing slashes are handled consistently
+ * - All parameter formats are normalized to a standard form
+ * - Paths are case-insensitive
+ *
+ * Supported parameter formats:
+ * - {id}, {userId}, {item_id}  (OpenAPI/Swagger style)
+ * - :id, :userId, :item_id     (Express/Koa style)
+ * - <id>, <userId>, <item_id>  (Flask/Django style)
+ * - [id], [userId], [item_id]  (Alternative style)
+ *
+ * @param path - Path or URL to normalize
+ * @returns Normalized path for comparison
+ *
+ * @example
+ * ```typescript
+ * normalizePathForMatching('http://localhost:3000/api/users/{id}')
+ * // Returns: '/api/users/:param'
+ *
+ * normalizePathForMatching('/api/users/:userId?page=1')
+ * // Returns: '/api/users/:param'
+ *
+ * normalizePathForMatching('/api/users/')
+ * // Returns: '/api/users'
+ *
+ * normalizePathForMatching('/API/Users/<id>')
+ * // Returns: '/api/users/:param'
+ * ```
  */
-function normalizePathForComparison(path: string): string {
+export function normalizePathForMatching(path: string): string {
   if (!path) return '';
-  // If an absolute URL, extract the path portion
+  
+  // Step 1: Handle absolute URLs - extract pathname
   try {
     if (path.startsWith('http://') || path.startsWith('https://')) {
-      const u = new URL(path);
-      path = u.pathname || '/';
+      const url = new URL(path);
+      path = url.pathname || '/';
     }
   } catch {
-    // ignore URL parse errors
+    // If URL parsing fails, continue with original path
   }
 
-  // Remove query and fragment
+  // Step 2: Remove query string and fragment
   path = path.split('?')[0].split('#')[0];
 
-  // Remove trailing slash (but keep root)
-  if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+  // Step 3: Remove trailing slash (but preserve root '/')
+  if (path.length > 1 && path.endsWith('/')) {
+    path = path.slice(0, -1);
+  }
 
-  // Normalize parameter placeholders to :param
-  path = path.replace(/\{[^}]+\}|:[^\/]+|\[[^\]]+\]/g, ':param');
+  // Step 4: Normalize ALL parameter placeholder formats to ':param'
+  // This ensures {id}, :id, <id>, [id] all match each other
+  path = path.replace(/\{[^}]+\}|:[^\/]+|<[^>]+>|\[[^\]]+\]/g, ':param');
 
+  // Step 5: Convert to lowercase for case-insensitive matching
   return path.toLowerCase();
+}
+
+/**
+ * Check if two paths match, considering parameter placeholders
+ *
+ * This function implements the core path matching logic used throughout the system.
+ * It handles:
+ * - Exact path matches
+ * - Parameter placeholder matching (template vs concrete)
+ * - Concrete ID matching to templates (e.g., /users/123 matches /users/{id})
+ *
+ * @param path1 - First path (can be template or concrete)
+ * @param path2 - Second path (can be template or concrete)
+ * @returns True if paths match semantically
+ *
+ * @example
+ * ```typescript
+ * matchesPathTemplate('/api/users/{id}', '/api/users/123')
+ * // Returns: true
+ *
+ * matchesPathTemplate('/api/users/:userId', '/api/users/abc-def-123')
+ * // Returns: true
+ *
+ * matchesPathTemplate('/api/users', '/api/users/')
+ * // Returns: true (trailing slash normalized)
+ *
+ * matchesPathTemplate('/api/users', '/api/products')
+ * // Returns: false
+ *
+ * matchesPathTemplate('http://localhost/api/users', '/api/users')
+ * // Returns: true (absolute URL normalized)
+ * ```
+ */
+export function matchesPathTemplate(path1: string, path2: string): boolean {
+  // Normalize both paths
+  const normalized1 = normalizePathForMatching(path1);
+  const normalized2 = normalizePathForMatching(path2);
+  
+  // Split into segments
+  const segments1 = normalized1.split('/').filter(s => s.length > 0);
+  const segments2 = normalized2.split('/').filter(s => s.length > 0);
+  
+  // Must have same number of segments
+  if (segments1.length !== segments2.length) {
+    return false;
+  }
+  
+  // Compare each segment
+  for (let i = 0; i < segments1.length; i++) {
+    const seg1 = segments1[i];
+    const seg2 = segments2[i];
+    
+    // Exact match
+    if (seg1 === seg2) {
+      continue;
+    }
+    
+    // One or both are parameters - they match
+    if (seg1 === ':param' || seg2 === ':param') {
+      continue;
+    }
+    
+    // Check if one looks like a concrete ID and the other is a path segment
+    // This handles cases like /users/123 matching /users/{id}
+    // A concrete ID is typically: numbers, UUIDs, or alphanumeric strings
+    const isConcreteId = (seg: string) => {
+      return /^[0-9]+$/.test(seg) ||                           // Numeric ID: 123
+             /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg) || // UUID
+             /^[a-z0-9_-]{8,}$/i.test(seg);                    // Long alphanumeric: abc-def-123
+    };
+    
+    // If one segment looks like a concrete ID, it could match a parameter
+    if (isConcreteId(seg1) || isConcreteId(seg2)) {
+      continue;
+    }
+    
+    // Segments don't match
+    return false;
+  }
+  
+  return true;
+}
+
+/**
+ * Legacy function for backward compatibility
+ * Use normalizePathForMatching() instead
+ */
+function normalizePathForComparison(path: string): string {
+  return normalizePathForMatching(path);
 }
 
 /**
@@ -657,14 +793,13 @@ export function validateAndNormalizeHTTPStep(
   } else {
     normalized.url = normalizeUrl(step.url, baseUrl);
     
-    // Check if URL matches any discovered route
+    // Check if URL matches any discovered route using unified matching
     const urlPath = step.url.split('?')[0]; // Remove query params
-    const normalizedUrlPath = normalizePathForComparison(urlPath);
 
     const matchingRoute = discoveredRoutes.find(route => {
-      const routeNormalized = normalizePathForComparison(route.path);
       const methodMatches = route.method.toUpperCase() === step.method.toUpperCase();
-      return methodMatches && (routeNormalized === normalizedUrlPath || calculatePathSimilarity(route.path, urlPath) > 0.75);
+      // Use unified path matching - handles all parameter formats and concrete IDs
+      return methodMatches && matchesPathTemplate(route.path, urlPath);
     });
     
     if (!matchingRoute && discoveredRoutes.length > 0) {
@@ -725,25 +860,29 @@ export function validateAndNormalizeHTTPStep(
 
 /**
  * Detect if a test scenario requires multiple steps
- * 
+ *
  * This function analyzes the test context to determine if it needs
  * setup steps before the main action. For example, testing duplicate
  * creation requires creating the resource first, then attempting to
  * create it again.
- * 
+ *
+ * IMPORTANT: This uses GENERIC patterns only. Business-specific multi-step
+ * scenarios (like login flows) should be inferred from route analysis and
+ * AI reasoning, not hardcoded here.
+ *
  * @param context - Combined text from task and acceptance criterion
  * @returns Object indicating if multi-step is needed and what type
  */
 export function detectMultiStepRequirement(context: string): {
   requiresMultiStep: boolean;
-  setupAction: 'create' | 'login' | null;
+  setupAction: 'create' | null;
   mainAction: 'create' | 'update' | 'delete' | 'read' | null;
   reasoning: string;
 } {
   const contextLower = context.toLowerCase();
   
-  // Duplicate/conflict scenarios
-  if (contextLower.includes('duplicate') || contextLower.includes('already exists') || 
+  // Duplicate/conflict scenarios - GENERIC pattern
+  if (contextLower.includes('duplicate') || contextLower.includes('already exists') ||
       contextLower.includes('conflict')) {
     return {
       requiresMultiStep: true,
@@ -753,8 +892,8 @@ export function detectMultiStepRequirement(context: string): {
     };
   }
   
-  // Update scenarios
-  if (contextLower.includes('update') || contextLower.includes('modify') || 
+  // Update scenarios - GENERIC pattern
+  if (contextLower.includes('update') || contextLower.includes('modify') ||
       contextLower.includes('edit')) {
     return {
       requiresMultiStep: true,
@@ -764,7 +903,7 @@ export function detectMultiStepRequirement(context: string): {
     };
   }
   
-  // Delete scenarios
+  // Delete scenarios - GENERIC pattern
   if (contextLower.includes('delete') || contextLower.includes('remove')) {
     return {
       requiresMultiStep: true,
@@ -774,16 +913,9 @@ export function detectMultiStepRequirement(context: string): {
     };
   }
   
-  // Auth-dependent scenarios
-  if (contextLower.includes('authenticated') || contextLower.includes('logged in') ||
-      contextLower.includes('authorized')) {
-    return {
-      requiresMultiStep: true,
-      setupAction: 'login',
-      mainAction: 'read',
-      reasoning: 'Auth-dependent test requires login first, then performing action',
-    };
-  }
+  // Note: Auth-dependent scenarios removed - these are business-specific
+  // and should be handled by route analysis (e.g., detecting /auth/login paths)
+  // and AI reasoning from acceptance criteria
   
   return {
     requiresMultiStep: false,

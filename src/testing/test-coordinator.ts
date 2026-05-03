@@ -787,16 +787,36 @@ export class TestCoordinator {
 
     this.normalizedTests = normalizer.normalizeTestCases(testPlan.testCases, context);
 
-    // Log normalization results
+    // VALIDATION GATE (Issue #4): Check if tests are ready for execution
+    logger.info('🔍 Validating tests for execution readiness...');
+    const readyTests: NormalizedTest[] = [];
+    const notReadyTests: Array<{ test: NormalizedTest; reason: string }> = [];
+
+    for (const normalized of this.normalizedTests) {
+      const readinessCheck = normalizer.isTestReady(normalized);
+      if (readinessCheck.ready) {
+        readyTests.push(normalized);
+      } else {
+        notReadyTests.push({ test: normalized, reason: readinessCheck.reason || 'Unknown reason' });
+        logger.warn(`  ⚠️  Test not ready: ${normalized.config.name} - ${readinessCheck.reason}`);
+      }
+    }
+
+    // Update normalized tests to only include ready tests
+    this.normalizedTests = readyTests;
+
+    // Log validation results
     const validTests = this.normalizedTests.filter(t => t.isValid).length;
-    const invalidTests = this.normalizedTests.filter(t => !t.isValid).length;
-    logger.info(`✅ Valid tests: ${validTests}`);
+    const invalidTests = notReadyTests.length;
+    logger.info(`✅ Ready tests: ${validTests}`);
     if (invalidTests > 0) {
-      logger.warn(`⚠️  Invalid tests: ${invalidTests}`);
+      logger.warn(`⚠️  Not ready tests: ${invalidTests}`);
       
-      // Log details of invalid tests
-      this.normalizedTests.filter(t => !t.isValid).forEach(test => {
-        logger.warn(`  - ${test.config.name}: ${test.errorType} - ${test.errorMessage}`);
+      // Log details of not ready tests
+      notReadyTests.forEach(({ test, reason }) => {
+        const errorType = reason.startsWith('TRACEQA_GENERATION_ISSUE') ? 'generation_issue' :
+                         reason.startsWith('UNCERTAIN') ? 'uncertain' : 'validation_failed';
+        logger.warn(`  - ${test.config.name}: ${errorType} - ${reason}`);
       });
     }
 
