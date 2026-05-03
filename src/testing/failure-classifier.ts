@@ -173,6 +173,20 @@ function classifyByResponse(
 
   // 4xx errors - could be expected or unexpected
   if (status >= 400 && status < 500) {
+    // If 422 and response contains enum/validation hints, mark as generation issue
+    try {
+      const bodyStr = typeof (response as any).body === 'string' ? (response as any).body : JSON.stringify((response as any).body || {});
+      if (status === 422 && /one of|enum|allowed values|allowed:/i.test(bodyStr)) {
+        return {
+          classification: TestFailureClassification.TRACEQA_GENERATION_ISSUE,
+          reason: 'Validation failure (422) indicates generated request did not match expected schema or enum values',
+          confidence: 0.9,
+          metadata: { statusCode: status }
+        };
+      }
+    } catch (e) {
+      // ignore parse errors
+    }
     // Check if this is an expected error for a negative test
     if (isNegativeTest || EXPECTED_ERROR_STATUSES.includes(status)) {
       // If we expected this status, it might be a pass
