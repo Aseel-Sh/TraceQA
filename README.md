@@ -1,82 +1,156 @@
 # TraceQA
 
-TraceQA converts acceptance criteria into executable tests, validates generated test data against available signals (OpenAPI, source-code validation snippets, config examples), executes validated tests, and produces evidence-first reports.
+TraceQA converts acceptance criteria into executable tests, validates generated test data against available project signals, runs the tests, and produces evidence-first reports.
 
-Key points:
-- IBM watsonx.ai is used as a semantic mapper to propose tests; TraceQA never executes raw AI output without validation.
-- Test-data inference priority: OpenAPI -> route source snippets/validation -> config sample data -> IBM reasoning -> conservative placeholders.
-- Tests with low confidence in request data or setup are marked `uncertain` and not executed.
+## What it does
 
-Quick commands:
+- Parses acceptance criteria from Markdown or plain text.
+- Discovers API routes from the application codebase.
+- Generates QA task plans and HTTP tests.
+- Uses IBM watsonx.ai when configured, with conservative fallback behavior when confidence is low.
+- Marks ambiguous or unsafe tests as `uncertain` instead of guessing.
+- Generates proof artifacts and traceability reports.
+- Supports a demo mode for local testing without IBM credentials.
+
+## Current features
+
+- Acceptance criteria parsing.
+- Route discovery and route-to-criterion matching.
+- AI-assisted test planning with IBM watsonx.ai.
+- Deterministic fallback generation when AI output is truncated or not trustworthy.
+- Conservative request body generation and validation.
+- Uncertain/manual/skipped handling in execution and reporting.
+- JSON and Markdown report generation.
+- Trace matrix generation for acceptance-to-test mapping.
+- Demo runner for mock executions.
+
+## Requirements
+
+- Node.js 18 or newer.
+- npm.
+- IBM watsonx.ai credentials for AI-powered runs.
+
+## Install
 
 ```bash
-# Typecheck and build
-npm run typecheck
-npm run build
-
-# Run tests (example)
-traceqa test --acceptance-path acceptance.md --base-url http://localhost:3000 --yes
+npm install
 ```
 
-Artifacts:
-- Generated tests: `traceqa-generated/generated-http-tests.json`
-- Execution proof: `traceqa-proof/report.json` and `traceqa-proof/report.md`
+## Build and typecheck
 
-Environment variables (IBM watsonx):
-- `IBM_WATSONX_API_KEY` (required to use IBM)
-- `IBM_WATSONX_MODEL` (optional)
+```bash
+npm run typecheck
+npm run build
+```
 
-Limitations:
-- TraceQA uses lightweight static hints and IBM reasoning — it does not perform deep static analysis or runtime introspection of every project.
-- When constraints cannot be confidently inferred, tests are marked `uncertain` to avoid false application-failure reports.
+## Run
 
-For full developer usage and options, see the `src/cli.ts` entrypoint.
-| `IBM_WATSONX_URL` | No | `https://us-south.ml.cloud.ibm.com` | IBM watsonx.ai service URL |
+### CLI usage
+
+Install locally as a linked command:
+
+```bash
+npm link
+```
+
+Run the current workflow against an acceptance criteria file and a base URL:
+
+```bash
+traceqa run --acceptance-path acceptance.md --base-url http://localhost:3000 --yes
+```
+
+Legacy interactive mode is also available:
+
+```bash
+traceqa test --criteria acceptance.md --base-url http://localhost:3000
+```
+
+### Demo mode
+
+Run the demo with AI if IBM credentials are configured:
+
+```bash
+npm run demo
+```
+
+Run the deterministic mock demo:
+
+```bash
+npm run demo:mock
+```
+
+### Smoke test
+
+Run the IBM smoke test:
+
+```bash
+npm run smoke:ibm
+```
+
+## Scripts
+
+- `npm run typecheck` - TypeScript typecheck only.
+- `npm run build` - Build the CLI with tsup.
+- `npm run dev` - Run the CLI from source with tsx.
+- `npm run start` - Run the compiled CLI from `dist/`.
+- `npm run demo` - Run the demo runner.
+- `npm run demo:mock` - Run the demo runner in mock mode.
+- `npm run smoke:ibm` - Run the IBM smoke test.
+
+## Configuration
+
+Environment variables used for IBM watsonx.ai:
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `IBM_WATSONX_API_KEY` | Yes for AI runs | - | IBM watsonx API key |
+| `IBM_WATSONX_PROJECT_ID` | Yes for AI runs | - | IBM watsonx project ID |
+| `IBM_WATSONX_URL` | No | `https://us-south.ml.cloud.ibm.com` | IBM watsonx service URL |
 | `IBM_WATSONX_MODEL` | No | `ibm/granite-3-3-8b-instruct` | Model to use |
 | `IBM_WATSONX_MAX_TOKENS` | No | `4096` | Maximum tokens per request |
 | `IBM_WATSONX_TEMPERATURE` | No | `0.7` | Model temperature |
-| `TRACEQA_LOG_LEVEL` | No | `info` | Log level (debug/info/warn/error) |
+| `TRACEQA_LOG_LEVEL` | No | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 
-## Project Structure
+## Outputs
 
-```
-TraceQA/
-├── src/
-│   ├── cli/          # CLI interface and commands
-│   ├── core/         # Core application logic
-│   ├── agent/        # AI agent implementation
-│   ├── testing/      # Testing utilities and runners
-│   ├── mcp/          # Model Context Protocol integration
-│   ├── analysis/     # Ambiguity detection and git analysis
-│   ├── reporting/    # Report generation
-│   ├── demo/         # Demo mode implementation
-│   ├── utils/        # Utility functions
-│   └── types/        # TypeScript type definitions
-├── dist/             # Compiled output (generated)
-└── traceqa-proof/    # Test reports (generated)
-```
+Generated artifacts are written to these locations by default:
+
+- `traceqa-generated/` - Generated QA tasks and HTTP tests.
+- `traceqa-proof/report.json` - Execution proof in JSON format.
+- `traceqa-proof/report.md` - Human-readable execution report.
+- `traceqa-proof/trace-matrix.json` - Acceptance-to-test trace matrix.
+- `traceqa-debug/` - Debug output.
 
 ## Limitations
 
-- **Browser tests** require MCP server setup
-- **API tests** require accessible endpoints
-- **Git analysis** requires git repository
-- **IBM watsonx.ai** required for AI-powered test generation (demo mode available without)
+- AI-powered runs require valid IBM watsonx.ai credentials.
+- Route discovery is heuristic and depends on available project signals.
+- Tests with low confidence are marked `uncertain` rather than guessed.
+- API execution requires a reachable base URL.
+- Browser-oriented checks depend on the project setup and available automation support.
+- The tool favors safety and traceability over aggressive guesswork, so some criteria may produce uncertain or manual tests.
 
-## Contributing
+## Project structure
 
-Contributions welcome! Please read our contributing guidelines.
+```text
+src/
+  cli/           CLI entrypoint and prompts
+  agent/         IBM watsonx integration and agent logic
+  analysis/      Ambiguity and git analysis
+  config/        Configuration loading
+  core/          Build and process orchestration
+  discovery/     Route discovery
+  generators/    QA task and HTTP test generation
+  mcp/           MCP client integrations
+  parsers/       Acceptance criteria parsing
+  reporting/     Report generation
+  testing/       Execution and classification logic
+  utils/         Shared utilities
+  validation/    Route, body, and data validation
+```
 
-## License
+## Notes
 
-MIT
-
-## Support
-
-- Documentation: [GitHub Wiki](https://github.com/yourusername/traceqa/wiki)
-- Issues: [GitHub Issues](https://github.com/yourusername/traceqa/issues)
-- IBM watsonx.ai: [IBM Cloud Docs](https://cloud.ibm.com/docs/watsonx)
-
----
-
-**Note**: This project is currently in active development. Features and APIs may change.
+- The `run` command is the primary workflow.
+- The `test` command remains available for the legacy interactive flow.
+- Demo mode is useful when you want to validate the output format without connecting to IBM.

@@ -232,7 +232,7 @@ export class TestCoordinator {
     let ibmUsed = false;
 
     try {
-      logger.info('Starting TraceQA test execution with new architecture...');
+      logger.info('Starting TraceQA test execution...');
       logger.newLine();
       // Phase 1: Parse acceptance criteria
       logger.section('Phase 1: Parsing acceptance criteria');
@@ -267,7 +267,7 @@ export class TestCoordinator {
       }
       logger.newLine();
 
-      // Phase 6: Generate QA task plan using new architecture
+      // Phase 6: Generate QA task plan
       logger.section('Phase 6: Generating QA task plan');
       
       // Build config object
@@ -312,7 +312,7 @@ export class TestCoordinator {
       await writeQATaskPlan(qaTaskPlan, generatedDir);
       logger.newLine();
 
-      // Phase 7: Generate HTTP tests using new architecture
+      // Phase 7: Generate HTTP tests
       logger.section('Phase 7: Generating HTTP tests');
       
       const httpTestResult = await generateHTTPTests(
@@ -345,7 +345,7 @@ export class TestCoordinator {
       await writeGeneratedMetadata(metadata, generatedDir);
       logger.newLine();
 
-      // Phase 8: Execute ready tests using new architecture
+      // Phase 8: Execute ready tests
       logger.section('Phase 8: Executing ready tests');
       const readyTests = testSuite.tests.filter(t => t.status === 'ready');
       const uncertainTests = testSuite.tests.filter(t => t.status === 'uncertain');
@@ -379,8 +379,8 @@ export class TestCoordinator {
             error: r.status === 'failed' ? r.evidence.join('; ') : undefined,
           }));
           
-          const passed = executionResults.filter(r => r.passed).length;
-          const failed = executionResults.filter(r => !r.passed).length;
+          const passed = httpTestResults.filter(r => r.status === 'passed').length;
+          const failed = httpTestResults.filter(r => r.status === 'failed').length;
           
           logger.success(`✓ Executed ${readyTests.length} tests (${passed} passed, ${failed} failed)`);
         } catch (error) {
@@ -426,7 +426,7 @@ export class TestCoordinator {
       }
       logger.newLine();
 
-      // Phase 9: Generate reports using new architecture
+      // Phase 9: Generate reports
       logger.section('Phase 9: Generating reports');
       const reportGenerator = new ReportGenerator();
       
@@ -490,8 +490,8 @@ export class TestCoordinator {
       logger.section('Test Execution Summary');
       
       // Calculate summary statistics
-      const passed = executionResults.filter(r => r.passed).length;
-      const failed = executionResults.filter(r => !r.passed).length;
+      const passed = httpTestResults.filter(r => r.status === 'passed').length;
+      const failed = httpTestResults.filter(r => r.status === 'failed').length;
       
       logger.keyValue('Total QA Tasks', qaTaskPlan.summary.totalTasks.toString());
       logger.keyValue('  - Automated', qaTaskPlan.summary.automatedTasks.toString());

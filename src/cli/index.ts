@@ -36,7 +36,7 @@ export function createCLI(): Command {
     .helpOption('-h, --help', 'Display help information')
     .addHelpText('after', `
 Examples:
-  # Run tests with new architecture (recommended)
+  # Run tests (recommended)
   $ traceqa run --acceptance-path acceptance.md --base-url http://localhost:3000
   
   # Auto-approve execution without confirmation
@@ -86,10 +86,10 @@ For more information, visit: https://github.com/yourusername/traceqa
       }
     });
 
-  // Run command - New architecture workflow
+  // Run command workflow
   program
     .command('run')
-    .description('Run tests with new architecture (recommended)')
+    .description('Run tests (recommended)')
     .requiredOption('--acceptance-path <path>', 'Path to acceptance criteria file (required)')
     .requiredOption('--base-url <url>', 'Base URL of the application to test (required)')
     .option('-o, --output-dir <path>', 'Output directory for reports (default: traceqa-proof)', 'traceqa-proof')
@@ -488,7 +488,7 @@ async function handleTestCommand(options: {
 }
 
 /**
- * Handle the run command (new architecture)
+ * Handle the run command
  */
 async function handleRunCommand(options: {
   acceptancePath: string;
@@ -507,8 +507,8 @@ async function handleRunCommand(options: {
     logger.debug('Debug mode enabled');
   }
 
-  logger.section('TraceQA - New Architecture');
-  logger.info('Starting test execution with new workflow...');
+  logger.section('TraceQA');
+  logger.info('Starting test execution...');
   logger.newLine();
 
   // Validate acceptance criteria file
@@ -590,7 +590,7 @@ async function handleRunCommand(options: {
   });
 
   try {
-    // Run tests with new architecture
+    // Run tests
     await coordinator.runTestsWithNewArchitecture({
       acceptancePath,
       baseUrl: options.baseUrl,
@@ -657,7 +657,7 @@ function parseTestType(type: string): TestType {
 }
 
 /**
- * Execute tests with the given configuration using new architecture
+ * Execute tests with the given configuration
  */
 async function executeTests(
   config: TestConfig,
@@ -687,7 +687,7 @@ async function executeTests(
 
   logger.newLine();
 
-  // Validate required parameters for new architecture
+  // Validate required parameters
   if (!config.acceptanceCriteria || config.acceptanceCriteria.length === 0) {
     throw new TraceQAError(
       'Acceptance criteria are required. Use --criteria flag to provide an acceptance criteria file.',
@@ -765,9 +765,9 @@ async function executeTests(
     const tempAcceptancePath = path.join(config.repository.path, '.traceqa-temp-acceptance.md');
     await fs.writeFile(tempAcceptancePath, acceptanceCriteriaContent, 'utf-8');
 
-    // Run tests with new architecture
+    // Run tests
     logger.newLine();
-    logger.section('Running Tests with New Architecture');
+    logger.section('Running Tests');
     
     // Set up directories with backward compatibility
     const proofDir = config.outputDir || 'traceqa-proof';
