@@ -1208,6 +1208,19 @@ function generateMultiStepTest(
       setupBodyResult.body || {}
     );
 
+    // Add generic captures to try to obtain created resource identifiers
+    const captureVariables = [
+      { name: 'createdId', path: 'id', source: 'body' },
+      { name: 'createdId', path: 'resourceId', source: 'body' },
+      { name: 'createdId', path: 'resource.id', source: 'body' },
+      { name: 'createdId', path: 'data.id', source: 'body' },
+      { name: 'createdId', path: 'data.resourceId', source: 'body' },
+      { name: 'createdId', path: 'data.attributes.id', source: 'body' },
+      { name: 'createdId', path: 'result.id', source: 'body' },
+      { name: 'createdId', path: 'entity.id', source: 'body' },
+      { name: 'createdLocation', path: 'location', source: 'headers' }
+    ];
+
     steps.push({
       stepId: `${task.taskId}-S1`,
       description: 'Setup: Create resource',
@@ -1217,11 +1230,12 @@ function generateMultiStepTest(
       body: setupBody,
       expectedStatus: 201,
       acceptableStatuses: [200, 201],
+      captureVariables,
     });
   }
 
   // Step 2: Main action
-  if (multiStepReq.mainAction === 'create') {
+    if (multiStepReq.mainAction === 'create') {
     // Duplicate/conflict scenario
     const conflictBody = generateStatefulBody(
       'conflict',
@@ -1229,11 +1243,18 @@ function generateMultiStepTest(
       testDataContext.setupData
     );
 
+      // Replace any id fields in the conflict body with placeholder for runtime substitution
+      if (conflictBody && typeof conflictBody === 'object') {
+        if ('id' in conflictBody) conflictBody.id = '{{createdId}}';
+        if ('itemId' in conflictBody) conflictBody.itemId = '{{createdId}}';
+        if ('productId' in conflictBody) conflictBody.productId = '{{createdId}}';
+      }
+
     steps.push({
       stepId: `${task.taskId}-S2`,
       description: 'Attempt duplicate creation (expect conflict)',
       method: 'POST',
-      url: `${baseUrl}${route.path}`,
+        url: `${baseUrl}${route.path}`,
       headers: { 'Content-Type': 'application/json' },
       body: conflictBody,
       expectedStatus: 409,
@@ -1245,23 +1266,27 @@ function generateMultiStepTest(
       testDataContext,
       testDataContext.setupData
     );
+      // For update/delete actions, if the discovered route path includes parameters,
+      // substitute them with the captured placeholder so runtime substitution will work.
+      const paramReplacedPath = route.path.replace(/\{[^}]+\}|:[^\/]+|\[[^\]]+\]/g, '{{createdId}}');
 
     steps.push({
       stepId: `${task.taskId}-S2`,
       description: 'Update resource',
       method: 'PUT',
-      url: `${baseUrl}${route.path}`,
+        url: `${baseUrl}${paramReplacedPath}`,
       headers: { 'Content-Type': 'application/json' },
       body: updateBody,
       expectedStatus: 200,
       acceptableStatuses: [200, 204],
     });
   } else if (multiStepReq.mainAction === 'delete') {
+    const deletePath = route.path.replace(/\{[^}]+\}|:[^\/]+|\[[^\]]+\]/g, '{{createdId}}');
     steps.push({
       stepId: `${task.taskId}-S2`,
       description: 'Delete resource',
       method: 'DELETE',
-      url: `${baseUrl}${route.path}`,
+      url: `${baseUrl}${deletePath}`,
       headers: { 'Content-Type': 'application/json' },
       body: null,
       expectedStatus: 204,

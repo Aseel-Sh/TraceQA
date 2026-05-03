@@ -44,6 +44,8 @@ export interface HTTPTestExecutionResult {
     skipped: number;
   };
   duration: number;
+  /** Optional run-level failure (e.g., pre-run reachability/infrastructure failure) */
+  runFailure?: HTTPTestResult | null;
 }
 
 /**
@@ -469,6 +471,31 @@ async function executeWithRetry(
       responseBody = await response.text();
     }
 
+    // If server returned 422, attempt to detect allowed enum/validation hints and retry with safe value
+    if (response.status === 422 && step.body && typeof step.body === 'object' && retryCount < maxRetries) {
+      try {
+        const hints = extractAllowedValuesFromResponse(responseBody);
+        if (hints && Object.keys(hints).length > 0) {
+          // Apply the first hint to the request body (conservative, one-field repair)
+          const repairedBody = { ...(step.body as Record<string, any>) };
+          for (const [field, values] of Object.entries(hints)) {
+            if (values && values.length > 0) {
+              // Only repair top-level fields
+              repairedBody[field] = values[0];
+              logger.info(`Attempting one-time repair for field '${field}' using suggested value '${values[0]}'`);
+              break;
+            }
+          }
+
+          // Mutate step body and retry once
+          const repairedStep: HTTPTestStep = { ...step, body: repairedBody };
+          return executeWithRetry(repairedStep, config, retryCount + 1);
+        }
+      } catch (err) {
+        logger.debug('Repair attempt failed to parse hints', err);
+      }
+    }
+
     // Assert status
     const statusAssertion = assertStatus(
       response.status,
@@ -563,6 +590,69 @@ async function executeWithRetry(
       error: `Network error: ${errorMessage}`,
     };
   }
+}
+
+/**
+ * Heuristic parser to extract allowed enum/validation hints from a 422 response body
+ * Returns a mapping of fieldName -> array of allowed values
+ */
+function extractAllowedValuesFromResponse(body: any): Record<string, any[]> | null {
+  if (!body) return null;
+
+  // If body has explicit allowed values structure
+  try {
+    // Common pattern: { errors: [{ field: 'status', message: 'must be one of [a,b]', allowed: ['a','b'] }, ...] }
+    if (Array.isArray(body.errors) && body.errors.length > 0) {
+      const hints: Record<string, any[]> = {};
+      for (const err of body.errors) {
+        const field = err.field || err.property || null;
+        if (field) {
+          if (Array.isArray(err.allowed) && err.allowed.length > 0) {
+            hints[field] = err.allowed;
+            continue;
+          }
+          // Try to parse message for "one of" lists
+          const msg = String(err.message || '');
+          const m = msg.match(/one of[:]?\s*\[?([^\]]+)\]?/i);
+          if (m && m[1]) {
+            const vals = m[1].split(/,\s*/).map(s => s.replace(/^\s*['"]?|['"]?\s*$/g, ''));
+            hints[field] = vals;
+            continue;
+          }
+        }
+      }
+      if (Object.keys(hints).length > 0) return hints;
+    }
+
+    // Another common pattern: { message: 'status must be one of: A,B,C' }
+    if (typeof body.message === 'string') {
+      const m = body.message.match(/one of[:]?\s*([^\n]+)/i);
+      if (m && m[1]) {
+        const vals = m[1].split(/,\s*/).map(s => s.replace(/^['"]|['"]$/g, ''));
+        // No field name — return a generic hint for top-level
+        return { '': vals };
+      }
+    }
+
+    // If body itself looks like { field: { allowed: [...] } }
+    if (typeof body === 'object' && !Array.isArray(body)) {
+      const hints: Record<string, any[]> = {};
+      for (const [k, v] of Object.entries(body)) {
+        if (v && typeof v === 'object') {
+          if (Array.isArray((v as any).allowed) && (v as any).allowed.length > 0) {
+            hints[k] = (v as any).allowed;
+          } else if (Array.isArray((v as any).enum) && (v as any).enum.length > 0) {
+            hints[k] = (v as any).enum;
+          }
+        }
+      }
+      if (Object.keys(hints).length > 0) return hints;
+    }
+  } catch (e) {
+    return null;
+  }
+
+  return null;
 }
 
 /**
@@ -731,21 +821,33 @@ function classifyTestResult(
 
   // Check for generation issues (invalid URLs, network errors indicating bad test data)
   const generationIssues = stepResults.filter(result => {
-    if (!result.error) return false;
+    // If there was an explicit error string, check it
+    if (result.error) {
+      const error = result.error.toLowerCase();
+      // Invalid URL or malformed request indicates generation issue
+      if (error.includes('invalid url') ||
+          error.includes('malformed') ||
+          error.includes('typeerror') ||
+          error.includes('failed to parse')) {
+        return true;
+      }
 
-    const error = result.error.toLowerCase();
-    
-    // Invalid URL or malformed request indicates generation issue
-    if (error.includes('invalid url') ||
-        error.includes('malformed') ||
-        error.includes('typeerror') ||
-        error.includes('failed to parse')) {
-      return true;
+      // Connection refused to localhost without proper setup
+      if (error.includes('econnrefused') && result.url && result.url.includes('localhost')) {
+        return true;
+      }
     }
 
-    // Connection refused to localhost without proper setup
-    if (error.includes('econnrefused') && result.url.includes('localhost')) {
-      return true;
+    // If server returned 422 and response body hints at enum/validation, treat as generation issue
+    if (result.actualStatus === 422 && result.responseBody) {
+      const hints = extractAllowedValuesFromResponse(result.responseBody as any);
+      if (hints && Object.keys(hints).length > 0) {
+        return true;
+      }
+      // Also inspect response body strings for "one of" patterns
+      if (typeof result.responseBody === 'string' && /one of/i.test(result.responseBody)) {
+        return true;
+      }
     }
 
     return false;
@@ -1225,8 +1327,9 @@ export async function executeHTTPTests(
   const startTime = Date.now();
   
   logger.section('Executing HTTP Tests');
+  const readyTests = testSuite.tests.filter(t => t.status === 'ready');
   logger.info(`Total tests: ${testSuite.tests.length}`);
-  logger.info(`Ready tests: ${testSuite.summary.readyTests}`);
+  logger.info(`Ready tests: ${readyTests.length}`);
   logger.info(`Uncertain tests: ${testSuite.summary.uncertainTests}`);
   logger.info(`Manual tests: ${testSuite.summary.manualTests}`);
   logger.newLine();
@@ -1237,22 +1340,21 @@ export async function executeHTTPTests(
   
   if (!reachabilityResult.reachable) {
     logger.error('Application is not reachable', new Error(reachabilityResult.reason || 'Unknown reason'));
-    logger.warn('Marking all tests as infrastructure failures');
+    logger.warn('Pre-run reachability failed - aborting execution and recording run-level failure');
     logger.newLine();
 
-    // Mark all tests as infrastructure failures
-    const results: HTTPTestResult[] = testSuite.tests.map(test => ({
-      testId: test.id,
-      acceptanceCriterionId: test.acceptanceCriterionId,
-      qaTaskId: test.qaTaskId,
-      title: test.title,
-      status: 'failed' as const,
-      executor: 'http' as const,
+    // Create a single run-level failure result (do not fabricate per-test failures)
+    const runFailure: HTTPTestResult = {
+      testId: 'run-infrastructure-failure',
+      acceptanceCriterionId: '',
+      qaTaskId: '',
+      title: 'Run-level infrastructure failure',
+      status: 'failed',
+      executor: 'runner',
       stepResults: [],
       evidence: [
         'Pre-run reachability check failed',
         `Reason: ${reachabilityResult.reason || 'Application not reachable'}`,
-        'All tests skipped due to infrastructure failure',
       ],
       classification: {
         classification: TestFailureClassification.INFRASTRUCTURE_FAILURE,
@@ -1261,26 +1363,34 @@ export async function executeHTTPTests(
       },
       duration: 0,
       timestamp: new Date().toISOString(),
-    }));
+    };
 
     const duration = Date.now() - startTime;
-    const summary = generateExecutionSummary(results);
+    const summary = {
+      total: 0,
+      passed: 0,
+      failed: 0,
+      uncertain: 0,
+      manual: 0,
+      skipped: 0,
+    };
 
-    // Log summary
+    // Log summary (no executed tests)
     logger.section('Execution Summary');
-    logger.keyValue('Total Tests', String(summary.total));
-    logger.keyValue('Passed', String(summary.passed), 1);
-    logger.keyValue('Failed', String(summary.failed), 1);
-    logger.keyValue('Uncertain', String(summary.uncertain), 1);
-    logger.keyValue('Manual', String(summary.manual), 1);
-    logger.keyValue('Skipped', String(summary.skipped), 1);
+    logger.keyValue('Total Tests', String(0));
+    logger.keyValue('Passed', String(0), 1);
+    logger.keyValue('Failed', String(0), 1);
+    logger.keyValue('Uncertain', String(0), 1);
+    logger.keyValue('Manual', String(0), 1);
+    logger.keyValue('Skipped', String(0), 1);
     logger.keyValue('Duration', logger.formatDuration(duration));
     logger.newLine();
 
     return {
-      results,
+      results: [],
       summary,
       duration,
+      runFailure,
     };
   }
 
@@ -1289,9 +1399,9 @@ export async function executeHTTPTests(
 
   const results: HTTPTestResult[] = [];
 
-  // Execute each test
-  for (let i = 0; i < testSuite.tests.length; i++) {
-    const test = testSuite.tests[i];
+  // Execute only ready tests (uncertain/manual are reported by coordinator)
+  for (let i = 0; i < readyTests.length; i++) {
+    const test = readyTests[i];
     
     logger.info(`[${i + 1}/${testSuite.tests.length}] ${test.title}`);
     

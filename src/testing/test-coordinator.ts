@@ -359,9 +359,14 @@ export class TestCoordinator {
         
         try {
           const executionResult = await executeHTTPTests(testSuite, traceQAConfig);
-          
+
           // Store HTTP test results for new report generator
-          httpTestResults = executionResult.results;
+          httpTestResults = executionResult.results || [];
+
+          // If executor returned a run-level failure (e.g., reachability), include it as a single run-level result
+          if ((executionResult as any).runFailure) {
+            httpTestResults.push((executionResult as any).runFailure);
+          }
           
           // Convert HTTPTestResult[] to TestResult[] for backward compatibility
           executionResults = httpTestResults.map(r => ({

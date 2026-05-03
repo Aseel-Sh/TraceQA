@@ -804,76 +804,32 @@ export function inferFieldsFromContext(
   timestamp: string
 ): Record<string, any> {
   const inferredFields: Record<string, any> = {};
-  
-  // Extract endpoint information
-  const endpoint = route?.path || '';
-  const method = route?.method || '';
-  const endpointLower = endpoint.toLowerCase();
-  
-  // Combine task and acceptance criterion text for keyword analysis
+
+  // Conservative inference: only add fields if task/AC explicitly mentions them
   const contextText = `${task.title} ${task.expectedResult} ${acceptanceCriterion.description}`.toLowerCase();
-  
-  // Pattern 1: User/Account endpoints
-  if (endpointLower.includes('/user') || endpointLower.includes('/account')) {
-    if (method === 'POST' || method === 'PUT') {
-      // Common user fields
-      if (contextText.includes('email') || contextText.includes('mail')) {
-        inferredFields.email = generateEmailValue('email', testId);
-      }
-      if (contextText.includes('name') || contextText.includes('username')) {
-        inferredFields.name = `test-user-${testId}`;
-      }
-      if (contextText.includes('password')) {
-        inferredFields.password = `TestPass123!${testId}`;
-      }
-    }
+
+  if (contextText.includes('email') || contextText.includes('mail')) {
+    inferredFields.email = generateEmailValue('email', testId);
   }
-  
-  // Pattern 2: Product/Item endpoints
-  if (endpointLower.includes('/product') || endpointLower.includes('/item')) {
-    if (method === 'POST' || method === 'PUT') {
-      if (contextText.includes('name') || contextText.includes('title')) {
-        inferredFields.name = `test-product-${testId}`;
-      }
-      if (contextText.includes('price') || contextText.includes('cost')) {
-        inferredFields.price = 99.99;
-      }
-      if (contextText.includes('description')) {
-        inferredFields.description = `Test product description ${testId}`;
-      }
-    }
+  if (contextText.includes('password')) {
+    inferredFields.password = `Password123!${testId}`;
   }
-  
-  // Pattern 3: Order endpoints
-  if (endpointLower.includes('/order')) {
-    if (method === 'POST' || method === 'PUT') {
-      if (contextText.includes('quantity') || contextText.includes('amount')) {
-        inferredFields.quantity = 1;
-      }
-      if (contextText.includes('status')) {
-        inferredFields.status = 'pending';
-      }
-    }
+  if (contextText.includes('name') || contextText.includes('title')) {
+    inferredFields.name = `${testId}`;
   }
-  
-  // Pattern 4: Generic POST/PUT/PATCH - add common fields
-  if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
-    // Add name if mentioned and not already added
-    if (!inferredFields.name && (contextText.includes('name') || contextText.includes('title'))) {
-      inferredFields.name = `test-${testId}`;
-    }
-    
-    // Add status if mentioned
-    if (!inferredFields.status && contextText.includes('status')) {
-      inferredFields.status = 'active';
-    }
-    
-    // Add description if mentioned
-    if (!inferredFields.description && contextText.includes('description')) {
-      inferredFields.description = `Test description ${testId}`;
-    }
+  if (contextText.includes('quantity') || contextText.includes('amount')) {
+    inferredFields.quantity = 1;
   }
-  
+  if (contextText.includes('price') || contextText.includes('cost')) {
+    inferredFields.price = 1.0;
+  }
+  if (contextText.includes('status')) {
+    inferredFields.status = 'active';
+  }
+  if (contextText.includes('description') || contextText.includes('content')) {
+    inferredFields.description = `generated-${testId}`;
+  }
+
   return inferredFields;
 }
 
@@ -1012,67 +968,17 @@ function generateGenericFallback(
   method?: string,
   endpoint?: string
 ): Record<string, any> {
+  // Minimal, neutral fallback body that avoids application-specific terminology
   const body: Record<string, any> = {};
-  const endpointLower = (endpoint || '').toLowerCase();
-  
-  // Determine resource type from endpoint
-  let resourceType = 'generic';
-  if (endpointLower.includes('/user') || endpointLower.includes('/account')) {
-    resourceType = 'user';
-  } else if (endpointLower.includes('/product') || endpointLower.includes('/item')) {
-    resourceType = 'product';
-  } else if (endpointLower.includes('/order')) {
-    resourceType = 'order';
-  } else if (endpointLower.includes('/post') || endpointLower.includes('/article')) {
-    resourceType = 'content';
-  }
-  
-  // Generate fields based on resource type
-  switch (resourceType) {
-    case 'user':
-      body.name = `test-user-${testId}`;
-      body.email = generateEmailValue('user', testId);
-      if (scenario === 'valid') {
-        body.password = `TestPass123!${testId}`;
-      } else {
-        body.password = 'weak'; // Invalid scenario
-      }
-      body.status = 'active';
-      break;
-      
-    case 'product':
-      body.name = `test-product-${testId}`;
-      body.description = `Test product description ${testId}`;
-      body.price = scenario === 'valid' ? 99.99 : -10; // Negative price for invalid
-      body.quantity = 10;
-      body.category = 'test-category';
-      break;
-      
-    case 'order':
-      body.productId = `prod-${testId}`;
-      body.quantity = scenario === 'valid' ? 1 : 0; // Zero quantity for invalid
-      body.status = 'pending';
-      body.totalAmount = 99.99;
-      break;
-      
-    case 'content':
-      body.title = `test-post-${testId}`;
-      body.content = `Test content body ${testId}`;
-      body.author = `test-author-${testId}`;
-      body.status = 'draft';
-      body.publishedAt = new Date(parseInt(timestamp)).toISOString();
-      break;
-      
-    default:
-      // Generic fallback with common fields
-      body.name = `test-${testId}`;
-      body.description = `Test description ${testId}`;
-      body.status = 'active';
-      body.createdAt = new Date(parseInt(timestamp)).toISOString();
-      body.data = `generated-test-${testId}`;
-      break;
-  }
-  
+
+  // Provide commonly useful fields without assuming domain-specific meanings
+  body.name = `${testId}`;
+  body.description = `generated-${testId}`;
+  body.value = scenario === 'valid' ? 1 : 0;
+  body.status = scenario === 'valid' ? 'active' : 'invalid';
+  body.createdAt = new Date(parseInt(timestamp)).toISOString();
+  body.data = `generated-${testId}`;
+
   return body;
 }
 /**

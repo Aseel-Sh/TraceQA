@@ -59,6 +59,8 @@ export interface ReportSummary {
     /** Not executed breakdown (subsets of notExecuted) */
     skipped: number;
     manual: number;
+    /** Run-level infrastructure failure (pre-run) */
+    runLevelInfrastructureFailure?: boolean;
   };
   mergeReadiness: 'ready' | 'not_ready' | 'uncertain';
   riskLevel: 'low' | 'medium' | 'high';
@@ -242,19 +244,22 @@ export class ReportGenerator {
         result => result.acceptanceCriterionId === criterion.id
       );
 
-      // Calculate coverage metrics using consistent "executed" definition
-      // Executed = tests that actually ran (excludes skipped and manual)
-      const testsExecuted = relatedResults.filter(
-        r => r.classification.classification !== 'skipped' &&
-             r.classification.classification !== 'manual'
-      ).length;
-      const testsPassed = relatedResults.filter(
+      // Calculate coverage metrics only from ready tests that actually ran.
+      const readyTestIds = new Set(
+        relatedTests.filter(test => test.status === 'ready').map(test => test.id)
+      );
+      const executedResults = relatedResults.filter(
+        result => readyTestIds.has(result.testId) &&
+                  result.classification.classification !== 'uncertain' &&
+                  result.classification.classification !== 'manual' &&
+                  result.classification.classification !== 'skipped'
+      );
+      const testsExecuted = executedResults.length;
+      const testsPassed = executedResults.filter(
         r => r.classification.classification === 'passed'
       ).length;
-      const testsFailed = relatedResults.filter(
-        r => r.classification.classification !== 'passed' &&
-             r.classification.classification !== 'skipped' &&
-             r.classification.classification !== 'manual'
+      const testsFailed = executedResults.filter(
+        r => r.classification.classification !== 'passed'
       ).length;
 
       entries.push({
@@ -321,29 +326,42 @@ export class ReportGenerator {
     // EXECUTED = tests that actually ran (excludes skipped and manual)
     // NOT EXECUTED = skipped + manual (require human intervention or were not run)
     
-    const total = testResults.length;
-    
-    // Count by classification (primary metric)
-    const passed = testResults.filter(r => r.classification.classification === 'passed').length;
-    const applicationFailures = testResults.filter(r => r.classification.classification === 'application_failure').length;
-    const generationIssues = testResults.filter(r => r.classification.classification === 'traceqa_generation_issue').length;
-    const infrastructureFailures = testResults.filter(r => r.classification.classification === 'infrastructure_failure').length;
-    const uncertain = testResults.filter(r => r.classification.classification === 'uncertain').length;
-    const skipped = testResults.filter(r => r.classification.classification === 'skipped').length;
-    const manual = testResults.filter(r => r.classification.classification === 'manual').length;
-    
-    // Derived counts (non-overlapping)
-    const failed = applicationFailures + generationIssues + infrastructureFailures + uncertain;
-    const notExecuted = skipped + manual;
-    const executed = total - notExecuted;
+    // Use generated tests as the base for totals
+    const generatedTotal = testSuite.summary.totalGenerated;
+
+    // Detect run-level infrastructure failure (single result added by executor)
+    const runLevelFailure = testResults.find(r => r.testId && r.testId.startsWith('run-infrastructure-failure'));
+
+    // Count classifications only for generated tests (ignore run-level artifacts)
+    const generatedResults = testResults.filter(r => testSuite.tests.some(t => t.id === r.testId));
+
+    const passed = generatedResults.filter(r => r.classification.classification === 'passed').length;
+    const applicationFailures = generatedResults.filter(r => r.classification.classification === 'application_failure').length;
+    const generationIssues = generatedResults.filter(r => r.classification.classification === 'traceqa_generation_issue').length;
+    const infrastructureFailures = generatedResults.filter(r => r.classification.classification === 'infrastructure_failure').length;
+    const uncertain = generatedResults.filter(r => r.classification.classification === 'uncertain').length;
+    const skipped = generatedResults.filter(r => r.classification.classification === 'skipped').length;
+    const manual = generatedResults.filter(r => r.classification.classification === 'manual').length;
+
+    // Executed = number of generated ready tests that actually ran (exclude uncertain/manual)
+    const executed = generatedResults.filter(r => {
+      const corresponding = testSuite.tests.find(t => t.id === r.testId);
+      return corresponding && corresponding.status === 'ready' &&
+             r.classification.classification !== 'uncertain' &&
+             r.classification.classification !== 'manual' &&
+             r.classification.classification !== 'skipped';
+    }).length;
+
+    const notExecuted = generatedTotal - executed;
+    const failed = applicationFailures + generationIssues + infrastructureFailures;
     
     // Validation: ensure counts add up correctly
     const countCheck = executed + notExecuted;
-    if (countCheck !== total) {
-      logger.warn(`Count validation failed: executed(${executed}) + notExecuted(${notExecuted}) = ${countCheck} != total(${total})`);
+    if (countCheck !== generatedTotal) {
+      logger.warn(`Count validation failed: executed(${executed}) + notExecuted(${notExecuted}) = ${countCheck} != generatedTotal(${generatedTotal})`);
     }
-    
-    const failedCheck = applicationFailures + generationIssues + infrastructureFailures + uncertain;
+
+    const failedCheck = applicationFailures + generationIssues + infrastructureFailures;
     if (failedCheck !== failed) {
       logger.warn(`Failed count validation: sum of failure types(${failedCheck}) != failed(${failed})`);
     }
@@ -385,7 +403,7 @@ export class ReportGenerator {
         manual: testSuite.summary.manualTests
       },
       executionResults: {
-        total,
+        total: generatedTotal,
         executed,
         notExecuted,
         passed,
@@ -395,7 +413,8 @@ export class ReportGenerator {
         infrastructureFailures,
         uncertain,
         skipped,
-        manual
+        manual,
+        runLevelInfrastructureFailure: !!runLevelFailure
       },
       mergeReadiness,
       riskLevel
@@ -539,8 +558,24 @@ export class ReportGenerator {
     // Execution Results with Clear Breakdown
     md += `## Execution Results\n\n`;
     md += `**Total Tests:** ${summary.executionResults.total}\n`;
-    md += `**Executed:** ${summary.executionResults.executed} (${((summary.executionResults.executed / summary.executionResults.total) * 100).toFixed(1)}%)\n`;
-    md += `**Not Executed:** ${summary.executionResults.notExecuted} (${((summary.executionResults.notExecuted / summary.executionResults.total) * 100).toFixed(1)}%)\n\n`;
+    const totalTestsForPct = summary.executionResults.total || 0;
+    const executedPct = totalTestsForPct > 0 ? ((summary.executionResults.executed / totalTestsForPct) * 100).toFixed(1) : '0.0';
+    const notExecutedPct = totalTestsForPct > 0 ? ((summary.executionResults.notExecuted / totalTestsForPct) * 100).toFixed(1) : '0.0';
+
+    md += `**Executed:** ${summary.executionResults.executed} (${executedPct}%)\n`;
+    md += `**Not Executed:** ${summary.executionResults.notExecuted} (${notExecutedPct}%)\n\n`;
+    // Run-level infrastructure failure note
+    const runFailureResult = testResults.find(r => r.testId === 'run-infrastructure-failure');
+    if (runFailureResult) {
+      md += `**Run-level Infrastructure Failure:** ${runFailureResult.classification.reason}\n`;
+      if (runFailureResult.evidence && runFailureResult.evidence.length > 0) {
+        md += `- Details:\n`;
+        runFailureResult.evidence.forEach(ev => {
+          md += `  - ${ev}\n`;
+        });
+        md += `\n`;
+      }
+    }
     
     md += `### Execution Outcomes\n\n`;
     md += `- ✓ **Passed:** ${summary.executionResults.passed}\n`;

@@ -248,6 +248,34 @@ function hasPathParameters(path: string): boolean {
 }
 
 /**
+ * Normalize a path for comparison: remove trailing slash, strip base URL if present,
+ * and normalize parameter placeholders to a common token.
+ */
+function normalizePathForComparison(path: string): string {
+  if (!path) return '';
+  // If an absolute URL, extract the path portion
+  try {
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      const u = new URL(path);
+      path = u.pathname || '/';
+    }
+  } catch {
+    // ignore URL parse errors
+  }
+
+  // Remove query and fragment
+  path = path.split('?')[0].split('#')[0];
+
+  // Remove trailing slash (but keep root)
+  if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+
+  // Normalize parameter placeholders to :param
+  path = path.replace(/\{[^}]+\}|:[^\/]+|\[[^\]]+\]/g, ':param');
+
+  return path.toLowerCase();
+}
+
+/**
  * Calculate path similarity score considering parameter patterns
  */
 function calculatePathSimilarity(path1: string, path2: string): number {
@@ -346,6 +374,34 @@ export function matchRouteToTask(
       route: null,
       method: expectedMethod,
       reasoning: 'No routes discovered from the application',
+    };
+  }
+
+  // Prefer a route whose path tokens are directly reflected in the task text.
+  const directMatch = discoveredRoutes.find(route => {
+    if (expectedMethod && route.method.toUpperCase() !== expectedMethod.toUpperCase()) {
+      return false;
+    }
+
+    const normalizedPath = normalizePathForComparison(route.path);
+    const pathTokens = normalizedPath
+      .split('/')
+      .filter(token => token.length > 0 && token !== 'api' && !/^v\d+$/.test(token) && token !== ':param');
+
+    if (pathTokens.length === 0) {
+      return false;
+    }
+
+    return pathTokens.every(token => keywords.includes(token) || keywords.some(keyword => keyword.includes(token) || token.includes(keyword)));
+  });
+
+  if (directMatch && expectedMethod) {
+    return {
+      matched: true,
+      confidence: 'high',
+      route: directMatch,
+      method: directMatch.method,
+      reasoning: `Direct route-token match for ${directMatch.method.toUpperCase()} ${directMatch.path}`,
     };
   }
   
@@ -603,9 +659,13 @@ export function validateAndNormalizeHTTPStep(
     
     // Check if URL matches any discovered route
     const urlPath = step.url.split('?')[0]; // Remove query params
-    const matchingRoute = discoveredRoutes.find(route => 
-      route.path === urlPath && route.method.toUpperCase() === step.method.toUpperCase()
-    );
+    const normalizedUrlPath = normalizePathForComparison(urlPath);
+
+    const matchingRoute = discoveredRoutes.find(route => {
+      const routeNormalized = normalizePathForComparison(route.path);
+      const methodMatches = route.method.toUpperCase() === step.method.toUpperCase();
+      return methodMatches && (routeNormalized === normalizedUrlPath || calculatePathSimilarity(route.path, urlPath) > 0.75);
+    });
     
     if (!matchingRoute && discoveredRoutes.length > 0) {
       warnings.push(`URL ${urlPath} with method ${step.method} not found in discovered routes. This may indicate a typo or undiscovered endpoint.`);
